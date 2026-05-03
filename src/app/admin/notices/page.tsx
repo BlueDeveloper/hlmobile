@@ -3,7 +3,7 @@
 import { useState, useEffect, useCallback } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { fetchNotices, createNotice, updateNotice, deleteNotice } from "@/lib/api";
+import { fetchNotices, createNotice, updateNotice, deleteNotice, uploadImage } from "@/lib/api";
 import { useToast } from "@/components/Toast";
 import type { Notice } from "@/types";
 import styles from "../page.module.css";
@@ -15,34 +15,52 @@ export default function AdminNoticesPage() {
   const [checkedIds, setCheckedIds] = useState<Set<number>>(new Set());
   const [modal, setModal] = useState<"create" | "edit" | null>(null);
   const [editing, setEditing] = useState<Notice | null>(null);
-  const [form, setForm] = useState({ title: "", content: "", isPinned: false });
+  const [form, setForm] = useState({ title: "", content: "", isPinned: false, attachments: [] as string[] });
+  const [uploading, setUploading] = useState(false);
   const router = useRouter();
 
   const load = useCallback(async () => {
     const token = sessionStorage.getItem("admin_token");
     if (!token) { router.push("/admin"); return; }
     setLoading(true);
-    const data = await fetchNotices();
-    setNotices(data);
-    setLoading(false);
-  }, [router]);
+    try {
+      const data = await fetchNotices();
+      setNotices(data);
+    } catch {
+      toast("데이터를 불러오는데 실패했습니다.", "error");
+    } finally {
+      setLoading(false);
+    }
+  }, [router, toast]);
 
   useEffect(() => { load(); }, [load]);
 
-  const openCreate = () => { setForm({ title: "", content: "", isPinned: false }); setEditing(null); setModal("create"); };
-  const openEdit = (n: Notice) => { setForm({ title: n.title, content: n.content, isPinned: !!n.is_pinned }); setEditing(n); setModal("edit"); };
+  const openCreate = () => { setForm({ title: "", content: "", isPinned: false, attachments: [] }); setEditing(null); setModal("create"); };
+  const openEdit = (n: Notice) => { let attachments: string[] = []; try { attachments = n.attachments ? JSON.parse(n.attachments) : []; } catch { attachments = []; } setForm({ title: n.title, content: n.content, isPinned: !!n.is_pinned, attachments }); setEditing(n); setModal("edit"); };
 
   const handleSave = async () => {
     if (!form.title.trim()) { toast("제목을 입력해주세요.", "error"); return; }
     if (!form.content.trim()) { toast("내용을 입력해주세요.", "error"); return; }
+    const payload = { ...form, attachments: form.attachments.length > 0 ? JSON.stringify(form.attachments) : undefined };
     if (modal === "create") {
-      const res = await createNotice(form);
+      const res = await createNotice(payload);
       if (!res.ok) { toast(res.error || "오류가 발생했습니다.", "error"); return; }
     } else if (editing) {
-      await updateNotice(editing.id, form);
+      await updateNotice(editing.id, payload);
     }
     setModal(null);
     load();
+  };
+
+  const handleFileUpload = async (file: File) => {
+    setUploading(true);
+    const res = await uploadImage(file);
+    setUploading(false);
+    if (res.ok && res.data) {
+      setForm(prev => ({ ...prev, attachments: [...prev.attachments, res.data!.url] }));
+    } else {
+      toast("업로드에 실패했습니다.", "error");
+    }
   };
 
   const handleBulkDelete = async () => {
@@ -75,6 +93,7 @@ export default function AdminNoticesPage() {
           <Link href="/admin/form-settings" className={styles.sidebarLink}>📝 신청서설정</Link>
           <Link href="/admin/notices" className={`${styles.sidebarLink} ${styles.sidebarLinkActive}`}>📢 공지사항</Link>
           <Link href="/admin/inquiries" className={styles.sidebarLink}>💬 문의</Link>
+          <Link href="/admin/site-settings" className={styles.sidebarLink}>⚙️ 사이트설정</Link>
         </nav>
         <div className={styles.sidebarLogout}><button className={styles.logoutBtn} onClick={handleLogout}>로그아웃</button></div>
       </aside>
@@ -133,7 +152,7 @@ export default function AdminNoticesPage() {
         )}
 
         {modal && (
-          <div className={styles.overlay} onClick={() => setModal(null)}>
+          <div className={styles.overlay}>
             <div className={styles.modal} onClick={(e) => e.stopPropagation()} onKeyDown={(e) => { if (e.key === "Enter" && e.ctrlKey) { e.preventDefault(); handleSave(); } }}>
               <div className={styles.modalHeader}>
                 <h2 className={styles.modalTitle}>{modal === "create" ? "공지 작성" : "공지 수정"}</h2>
@@ -166,6 +185,26 @@ export default function AdminNoticesPage() {
                     onBlur={(e) => setForm({ ...form, content: e.currentTarget.innerHTML })}
                     style={{ minHeight: 200, padding: "14px 16px", outline: "none", fontSize: 14, lineHeight: 1.7, color: "var(--text-0)" }}
                   />
+                </div>
+              </div>
+              <div className={styles.formGroup}>
+                <label className={styles.formLabel}>첨부파일</label>
+                <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                  {form.attachments.map((url, i) => (
+                    <div key={i} style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 10px", background: "#F8FAFC", borderRadius: 8, border: "1px solid #E8ECF1" }}>
+                      {url.match(/\.(jpg|jpeg|png|gif|webp)$/i) ? (
+                        <img src={url} alt="" style={{ width: 40, height: 40, objectFit: "cover", borderRadius: 4 }} />
+                      ) : (
+                        <span style={{ fontSize: 20 }}>📎</span>
+                      )}
+                      <a href={url} target="_blank" rel="noopener noreferrer" style={{ flex: 1, fontSize: 12, color: "var(--brand)", wordBreak: "break-all" }}>{url.split("/").pop()}</a>
+                      <button onClick={() => setForm(prev => ({ ...prev, attachments: prev.attachments.filter((_, j) => j !== i) }))} style={{ fontSize: 11, color: "#DC2626", cursor: "pointer", fontWeight: 700 }}>✕</button>
+                    </div>
+                  ))}
+                  <label style={{ padding: "10px", background: "#F1F5F9", borderRadius: 8, cursor: "pointer", fontSize: 13, fontWeight: 600, color: "var(--text-2)", border: "2px dashed #D1D5DB", textAlign: "center" }}>
+                    {uploading ? "업로드 중..." : "+ 파일/이미지 추가"}
+                    <input type="file" accept="image/*,.pdf,.doc,.docx,.xls,.xlsx" hidden onChange={e => { const f = e.target.files?.[0]; if (f) handleFileUpload(f); }} />
+                  </label>
                 </div>
               </div>
               <div className={styles.formGroup}>

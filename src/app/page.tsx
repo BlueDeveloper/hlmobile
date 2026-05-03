@@ -4,6 +4,7 @@ import { useState, useEffect } from "react";
 import Link from "next/link";
 import Header from "@/components/Header";
 import { fetchCarrierTree, fetchNotices } from "@/lib/api";
+import { useSiteSettings } from "@/lib/useSiteSettings";
 import type { Carrier, Notice } from "@/types";
 import styles from "./page.module.css";
 
@@ -12,6 +13,7 @@ export default function Home() {
   const [carriersLoading, setCarriersLoading] = useState(true);
   const [activeMno, setActiveMno] = useState("");
   const [notices, setNotices] = useState<Notice[]>([]);
+  const siteSettings = useSiteSettings();
 
   useEffect(() => {
     fetchCarrierTree()
@@ -22,7 +24,7 @@ export default function Home() {
   }, []);
 
   const activeMnoData = tree.find((m) => m.id === activeMno);
-  const mvnoList = activeMnoData?.children || [];
+  const mvnoList = (activeMnoData?.children || []).filter(c => c.is_active);
 
   const isImg = (s: string) => s && (s.startsWith("http") || s.startsWith("/"));
 
@@ -50,7 +52,10 @@ export default function Home() {
             </p>
             <div className={styles.heroCTA}>
               <Link href="/form" className={styles.btnPrimary}>
-                신청서 작성하기 →
+                신청서 작성하기
+              </Link>
+              <Link href="/inquiry" className={styles.btnSecondary}>
+                문의하기
               </Link>
             </div>
           </div>
@@ -122,15 +127,26 @@ export default function Home() {
                 {mvnoList.length === 0 ? (
                   <div style={{ gridColumn: "1 / -1", textAlign: "center", padding: 40, color: "var(--text-3)" }}>등록된 알뜰폰이 없습니다.</div>
                 ) : (
-                  mvnoList.map((c, ci) => (
-                    <Link key={c.id} href={`/form?carrier=${encodeURIComponent(c.id)}`} className={`${styles.mvnoCard} fadeIn`} style={{ animationDelay: `${ci * 0.04}s` }}>
-                      {isImg(c.icon) ? (
-                        <img src={c.icon} alt={c.title} className={styles.mvnoImg} />
-                      ) : (
-                        <span className={styles.mvnoEmoji}>{c.icon}</span>
-                      )}
-                    </Link>
-                  ))
+                  mvnoList.map((c, ci) => {
+                    const hasLink = c.forms?.startsWith("http");
+                    return hasLink ? (
+                      <a key={c.id} href={c.forms} target="_blank" rel="noopener noreferrer" className={`${styles.mvnoCard} fadeIn`} style={{ animationDelay: `${ci * 0.04}s`, textDecoration: "none" }}>
+                        {isImg(c.icon) ? (
+                          <img src={c.icon} alt={c.title} className={styles.mvnoImg} />
+                        ) : (
+                          <span className={styles.mvnoEmoji}>{c.icon}</span>
+                        )}
+                      </a>
+                    ) : (
+                      <Link key={c.id} href={`/form?carrier=${encodeURIComponent(c.id)}`} className={`${styles.mvnoCard} fadeIn`} style={{ animationDelay: `${ci * 0.04}s` }}>
+                        {isImg(c.icon) ? (
+                          <img src={c.icon} alt={c.title} className={styles.mvnoImg} />
+                        ) : (
+                          <span className={styles.mvnoEmoji}>{c.icon}</span>
+                        )}
+                      </Link>
+                    );
+                  })
                 )}
               </div>
             </>
@@ -185,12 +201,17 @@ export default function Home() {
         <div className={styles.footerInner}>
           <div className={styles.footerBrand}>
             <div className={styles.footerLogo}>
-              <span className={styles.footerLogoIcon}>H</span>
-              hlmobile
+              {siteSettings.logo_image ? (
+                <img src={siteSettings.logo_image} alt="logo" style={{ height: 26, objectFit: "contain" }} />
+              ) : (
+                <>
+                  <span className={styles.footerLogoIcon}>{siteSettings.logo_icon || "H"}</span>
+                  {(siteSettings.logo_text || "hl") + (siteSettings.logo_accent || "mobile")}
+                </>
+              )}
             </div>
             <p className={styles.footerDesc}>
-              모든 통신사 신청서를 무료로 작성하고 출력하세요.
-              가입, 해지, 번호이동 양식을 한 곳에서.
+              {siteSettings.footer_desc || "모든 통신사 신청서를 무료로 작성하고 출력하세요. 가입, 해지, 번호이동 양식을 한 곳에서."}
             </p>
           </div>
           <div className={styles.footerLinks}>
@@ -217,8 +238,12 @@ export default function Home() {
             </div>
           </div>
         </div>
+        <div style={{ padding: "16px 24px", fontSize: 11, color: "var(--text-3)", lineHeight: 1.8, borderTop: "1px solid var(--border-light)", marginTop: 16 }}>
+          사업자: {siteSettings.company_name || "주식회사 에치엘그룹"} | 대표자: {siteSettings.company_ceo || "왕산루"} | 사업자등록번호: {siteSettings.business_number || "143-86-02556"}<br />
+          주소: {siteSettings.address || "인천광역시 미추홀구 인하로77번길 27 3층"} | 통신판매번호: {siteSettings.commerce_number || "제 2025-인천연수구-1032호"}
+        </div>
         <div className={styles.footerBottom}>
-          © 2026 hlmobile. All rights reserved.
+          {siteSettings.copyright || "© 2026 hlmobile. All rights reserved."}
           <Link href="/admin" style={{ marginLeft: 16, color: "var(--text-3)", fontSize: 12 }}>관리자</Link>
         </div>
       </footer>

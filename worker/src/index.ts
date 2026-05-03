@@ -10,6 +10,7 @@ import { handleApplications } from "./applications";
 import { handleDashboard } from "./dashboard";
 import { handleFormVersions } from "./formVersions";
 import { handlePdfFill } from "./pdfFill";
+import { handleSettings } from "./settings";
 
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
@@ -45,14 +46,17 @@ export default {
         response = await handleNotices(request, env, path);
       } else if (path.startsWith("/api/applications")) {
         response = await handleApplications(request, env, path);
+      } else if (path === "/api/settings") {
+        response = await handleSettings(request, env);
       } else if (path.startsWith("/api/inquiries")) {
         response = await handleInquiries(request, env, path);
       } else {
         response = json({ ok: false, error: "Not found" }, 404);
       }
     } catch (err) {
-      const message = err instanceof Error ? err.message : "Internal server error";
-      response = json({ ok: false, error: message }, 500);
+      console.error("API Error:", err);
+      console.error(err instanceof Error ? err.message : err);
+      response = json({ ok: false, error: "서버 오류가 발생했습니다" }, 500);
     }
 
     const cors = corsHeaders(request);
@@ -65,7 +69,12 @@ export default {
 };
 
 async function handleLogin(request: Request, env: Env): Promise<Response> {
-  const body = await request.json<{ password?: string }>();
+  let body: { password?: string };
+  try {
+    body = await request.json<{ password?: string }>();
+  } catch {
+    return json({ ok: false, error: "잘못된 요청 형식입니다" }, 400);
+  }
   if (!body.password || body.password !== env.ADMIN_PASSWORD) {
     return json({ ok: false, error: "비밀번호가 올바르지 않습니다" }, 401);
   }

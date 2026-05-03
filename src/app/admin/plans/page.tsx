@@ -1,12 +1,16 @@
 "use client";
 
-import { useState, useEffect, useCallback, Suspense } from "react";
+import { useState, useEffect, useCallback, useMemo, Suspense } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
-import { fetchCarrierTree, fetchPlans, createPlan, updatePlan, deletePlan } from "@/lib/api";
+import { fetchCarrierTree, fetchPlans, createPlan, updatePlan, deletePlan, updateCarrier } from "@/lib/api";
 import { useToast } from "@/components/Toast";
+import { formatPrice, parseJsonSafe } from "@/lib/utils";
+import { DEFAULT_PLAN_FIELDS, DEFAULT_PLAN_KEYS } from "@/lib/constants";
 import type { Carrier, Plan } from "@/types";
 import styles from "../page.module.css";
+
+interface PlanField { key: string; label: string }
 
 function PlansContent() {
   const { toast } = useToast();
@@ -28,11 +32,19 @@ function PlansContent() {
     voice: "", sms: "", data: "", qos: "-",
     type: "" as string, sort_order: 0,
   });
+  const [extraForm, setExtraForm] = useState<Record<string, string>>({});
+  const [fieldModal, setFieldModal] = useState(false);
+  const [editingFields, setEditingFields] = useState<PlanField[]>([]);
 
-  const loadCarriers = useCallback(async () => {
+  // 선택된 통신사의 커스텀 요금제 필드
+  const [customPlanFields, setCustomPlanFields] = useState<PlanField[]>([]);
+
+  const allMvnos = useMemo(() => tree.flatMap(m => m.children || []), [tree]);
+
+  const loadCarriers = useCallback(async (skipCache = false) => {
     const token = sessionStorage.getItem("admin_token");
     if (!token) { router.push("/admin"); return; }
-    const data = await fetchCarrierTree(false);
+    const data = await fetchCarrierTree(false, skipCache);
     setTree(data);
     setSelectedCarrier((prev) => {
       if (prev) return prev;
@@ -52,7 +64,24 @@ function PlansContent() {
   useEffect(() => { loadCarriers(); }, [loadCarriers]);
   useEffect(() => { loadPlans(); }, [loadPlans]);
 
-  const allMvnos = tree.flatMap(m => m.children || []);
+  // 통신사 변경 시 커스텀 필드 로드
+  useEffect(() => {
+    if (!selectedCarrier || tree.length === 0) return;
+    const mvno = allMvnos.find(c => c.id === selectedCarrier);
+    if (!mvno?.form_config) { setCustomPlanFields([]); return; }
+    try {
+      const parsed = JSON.parse(mvno.form_config);
+      if (Array.isArray(parsed)) {
+        setCustomPlanFields([]);
+      } else if (parsed.planFields) {
+        setCustomPlanFields(parsed.planFields.filter((f: PlanField) => !DEFAULT_PLAN_KEYS.has(f.key)));
+      } else {
+        setCustomPlanFields([]);
+      }
+    } catch { setCustomPlanFields([]); }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedCarrier, tree]);
+
   const carrierName = allMvnos.find((c) => c.id === selectedCarrier)?.title || selectedCarrier;
 
   const filteredPlans = plans.filter((p) => {
@@ -63,12 +92,14 @@ function PlansContent() {
 
   const openCreate = () => {
     setForm({ name: "", monthly: 0, base_fee: 0, discount: 0, voice: "", sms: "", data: "", qos: "-", type: "", sort_order: plans.length + 1 });
+    setExtraForm({});
     setEditing(null);
     setModal("create");
   };
 
   const openEdit = (p: Plan) => {
     setForm({ name: p.name, monthly: p.monthly, base_fee: p.base_fee, discount: p.discount, voice: p.voice, sms: p.sms, data: p.data, qos: p.qos, type: p.type, sort_order: p.sort_order });
+    try { setExtraForm(p.extra_fields ? JSON.parse(p.extra_fields) : {}); } catch { setExtraForm({}); }
     setEditing(p);
     setModal("edit");
   };
@@ -81,11 +112,14 @@ function PlansContent() {
     if (!form.sms.trim()) { toast("문자를 입력해주세요.", "error"); return; }
     if (!form.data.trim()) { toast("데이터를 입력해주세요.", "error"); return; }
 
+    const hasExtra = Object.keys(extraForm).length > 0 && Object.values(extraForm).some(v => v.trim());
+    const payload = { ...form, extraFields: hasExtra ? extraForm : undefined };
+
     if (modal === "create") {
-      const res = await createPlan({ carrierId: selectedCarrier, ...form, type: form.type as "postpaid" | "prepaid" });
+      const res = await createPlan({ carrierId: selectedCarrier, ...payload, type: form.type as "postpaid" | "prepaid" } as Parameters<typeof createPlan>[0]);
       if (!res.ok) { toast(res.error || "오류가 발생했습니다.", "error"); return; }
     } else if (modal === "edit" && editing) {
-      await updatePlan(editing.id, { ...form, type: form.type as "postpaid" | "prepaid" });
+      await updatePlan(editing.id, { ...payload, type: form.type as "postpaid" | "prepaid" } as Parameters<typeof updatePlan>[1]);
     }
     setModal(null);
     loadPlans();
@@ -94,39 +128,52 @@ function PlansContent() {
   const handleBulkDelete = async () => {
     if (checkedIds.size === 0) { toast("삭제할 요금제를 선택해주세요.", "error"); return; }
     if (!confirm(`${checkedIds.size}건의 요금제를 삭제합니다.`)) return;
-    for (const id of checkedIds) {
-      await deletePlan(id);
-    }
+    for (const id of checkedIds) { await deletePlan(id); }
     setCheckedIds(new Set());
     loadPlans();
   };
 
   const toggleCheck = (id: number) => {
-    setCheckedIds((prev) => {
-      const next = new Set(prev);
-      next.has(id) ? next.delete(id) : next.add(id);
-      return next;
-    });
+    setCheckedIds((prev) => { const next = new Set(prev); next.has(id) ? next.delete(id) : next.add(id); return next; });
   };
-
   const toggleCheckAll = () => {
-    if (checkedIds.size === filteredPlans.length) {
-      setCheckedIds(new Set());
-    } else {
-      setCheckedIds(new Set(filteredPlans.map((p) => p.id)));
+    checkedIds.size === filteredPlans.length ? setCheckedIds(new Set()) : setCheckedIds(new Set(filteredPlans.map(p => p.id)));
+  };
+
+  const openFieldModal = () => {
+    setEditingFields([...DEFAULT_PLAN_FIELDS, ...customPlanFields]);
+    setFieldModal(true);
+  };
+
+  const handleSaveFields = async () => {
+    const mvno = allMvnos.find(c => c.id === selectedCarrier);
+    let existingConfig: Record<string, unknown> = {};
+    if (mvno?.form_config) {
+      try {
+        const parsed = JSON.parse(mvno.form_config);
+        existingConfig = Array.isArray(parsed) ? { fields: parsed } : parsed;
+      } catch {}
     }
+    await updateCarrier(selectedCarrier, { form_config: JSON.stringify({ ...existingConfig, planFields: editingFields }) } as unknown as Partial<Carrier>);
+    setCustomPlanFields(editingFields.filter(f => !DEFAULT_PLAN_KEYS.has(f.key)));
+    setFieldModal(false);
+    toast("항목 저장 완료", "success");
+    loadCarriers(true);
   };
 
-  const handleLogout = () => {
-    sessionStorage.removeItem("admin_token");
-    router.push("/admin");
-  };
+  const handleLogout = () => { sessionStorage.removeItem("admin_token"); router.push("/admin"); };
+  const parsedExtras = useMemo(() => {
+    const map = new Map<number, Record<string, string>>();
+    for (const p of plans) {
+      map.set(p.id, parseJsonSafe<Record<string, string>>(p.extra_fields, {}));
+    }
+    return map;
+  }, [plans]);
 
-  const fmt = (n: number) => n.toLocaleString() + "원";
+  const getExtra = (p: Plan, key: string): string => parsedExtras.get(p.id)?.[key] || "";
 
   return (
     <div className={styles.adminLayout}>
-      {/* Desktop Sidebar */}
       <aside className={styles.sidebar}>
         <a href="/" className={styles.sidebarLogo} style={{textDecoration:"none",color:"inherit"}}><span className={styles.sidebarLogoIcon}>H</span>관리자</a>
         <nav className={styles.sidebarNav}>
@@ -137,13 +184,13 @@ function PlansContent() {
           <Link href="/admin/form-settings" className={styles.sidebarLink}>📝 신청서설정</Link>
           <Link href="/admin/notices" className={styles.sidebarLink}>📢 공지사항</Link>
           <Link href="/admin/inquiries" className={styles.sidebarLink}>💬 문의</Link>
+          <Link href="/admin/site-settings" className={styles.sidebarLink}>⚙️ 사이트설정</Link>
         </nav>
         <div className={styles.sidebarLogout}><button className={styles.logoutBtn} onClick={handleLogout}>로그아웃</button></div>
       </aside>
 
-      {/* Mobile Bottom Tab */}
       <nav className={styles.bottomTab}>
-          <Link href="/admin/dashboard" className={styles.tabLink}><span className={styles.tabIcon}>📊</span><span className={styles.tabLabel}>대시보드</span></Link>
+        <Link href="/admin/dashboard" className={styles.tabLink}><span className={styles.tabIcon}>📊</span><span className={styles.tabLabel}>대시보드</span></Link>
         <Link href="/admin/carriers" className={styles.tabLink}><span className={styles.tabIcon}>📱</span><span className={styles.tabLabel}>통신사</span></Link>
         <Link href="/admin/plans" className={`${styles.tabLink} ${styles.tabLinkActive}`}><span className={styles.tabIcon}>💰</span><span className={styles.tabLabel}>요금제</span></Link>
         <Link href="/admin/applications" className={styles.tabLink}><span className={styles.tabIcon}>📋</span><span className={styles.tabLabel}>신청서</span></Link>
@@ -155,49 +202,37 @@ function PlansContent() {
       <main className={styles.main}>
         <div className={styles.pageHeader}>
           <h1 className={styles.pageTitle}>요금제 관리</h1>
-          <button className={styles.addBtn} onClick={openCreate}>+ 추가</button>
+          <div style={{ display: "flex", gap: 8 }}>
+            {selectedCarrier && <button onClick={openFieldModal} style={{ padding: "8px 16px", background: "#F0FDF4", color: "#059669", borderRadius: 10, fontSize: 13, fontWeight: 700, cursor: "pointer", border: "1px solid #BBF7D0" }}>항목 관리</button>}
+            <button className={styles.addBtn} onClick={openCreate}>+ 추가</button>
+          </div>
         </div>
 
-        {/* 필터 영역 */}
+        {/* 필터 */}
         <div style={{ display: "flex", gap: 12, marginBottom: 20, flexWrap: "wrap", alignItems: "flex-end" }}>
           <div style={{ flex: "1 1 200px" }}>
-            <label style={{ display: "block", fontSize: 12, fontWeight: 700, color: "var(--text-3)", marginBottom: 4, fontFamily: "var(--font-mono)" }}>통신사</label>
-            <select
-              style={{ width: "100%", padding: "10px 14px", border: "2px solid #E8ECF1", borderRadius: 12, fontSize: 14, fontFamily: "inherit", background: "white" }}
-              value={selectedCarrier}
-              onChange={(e) => setSelectedCarrier(e.target.value)}
-            >
+            <label style={{ display: "block", fontSize: 12, fontWeight: 700, color: "var(--text-3)", marginBottom: 4 }}>통신사</label>
+            <select style={{ width: "100%", padding: "10px 14px", border: "2px solid #E8ECF1", borderRadius: 12, fontSize: 14, fontFamily: "inherit", background: "white" }}
+              value={selectedCarrier} onChange={(e) => setSelectedCarrier(e.target.value)}>
               <option value="" disabled>선택하세요</option>
-              {allMvnos.map((mvno) => (
-                <option key={mvno.id} value={mvno.id}>{mvno.title}</option>
-              ))}
+              {allMvnos.map((mvno) => <option key={mvno.id} value={mvno.id}>{mvno.title}</option>)}
             </select>
           </div>
           <div style={{ flex: "0 0 140px" }}>
-            <label style={{ display: "block", fontSize: 12, fontWeight: 700, color: "var(--text-3)", marginBottom: 4, fontFamily: "var(--font-mono)" }}>유형</label>
-            <select
-              style={{ width: "100%", padding: "10px 14px", border: "2px solid #E8ECF1", borderRadius: 12, fontSize: 14, fontFamily: "inherit", background: "white" }}
-              value={filterType}
-              onChange={(e) => setFilterType(e.target.value)}
-            >
+            <label style={{ display: "block", fontSize: 12, fontWeight: 700, color: "var(--text-3)", marginBottom: 4 }}>유형</label>
+            <select style={{ width: "100%", padding: "10px 14px", border: "2px solid #E8ECF1", borderRadius: 12, fontSize: 14, fontFamily: "inherit", background: "white" }}
+              value={filterType} onChange={(e) => setFilterType(e.target.value)}>
               <option value="">전체</option>
               <option value="postpaid">후불</option>
               <option value="prepaid">선불</option>
             </select>
           </div>
           <div style={{ flex: "1 1 200px" }}>
-            <label style={{ display: "block", fontSize: 12, fontWeight: 700, color: "var(--text-3)", marginBottom: 4, fontFamily: "var(--font-mono)" }}>검색</label>
-            <input
-              type="text"
-              placeholder="요금제명 검색"
-              value={filterSearch}
-              onChange={(e) => setFilterSearch(e.target.value)}
-              style={{ width: "100%", padding: "10px 14px", border: "2px solid #E8ECF1", borderRadius: 12, fontSize: 14, fontFamily: "inherit", outline: "none" }}
-            />
+            <label style={{ display: "block", fontSize: 12, fontWeight: 700, color: "var(--text-3)", marginBottom: 4 }}>검색</label>
+            <input type="text" placeholder="요금제명 검색" value={filterSearch} onChange={(e) => setFilterSearch(e.target.value)}
+              style={{ width: "100%", padding: "10px 14px", border: "2px solid #E8ECF1", borderRadius: 12, fontSize: 14, fontFamily: "inherit", outline: "none" }} />
           </div>
-          <div style={{ fontSize: 13, color: "var(--text-3)", padding: "10px 0" }}>
-            {filteredPlans.length}건
-          </div>
+          <div style={{ fontSize: 13, color: "var(--text-3)", padding: "10px 0" }}>{filteredPlans.length}건</div>
         </div>
 
         {loading ? (
@@ -206,7 +241,6 @@ function PlansContent() {
           <div className={styles.empty}>{filterSearch || filterType ? "검색 결과가 없습니다." : `${carrierName}에 등록된 요금제가 없습니다.`}</div>
         ) : (
           <>
-            {/* 일괄 삭제 바 */}
             {checkedIds.size > 0 && (
               <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "10px 16px", marginBottom: 12, background: "#FEF2F2", borderRadius: 12, border: "1px solid #FECACA" }}>
                 <span style={{ fontSize: 13, fontWeight: 600, color: "#DC2626" }}>{checkedIds.size}건 선택됨</span>
@@ -219,7 +253,9 @@ function PlansContent() {
               <thead>
                 <tr>
                   <th style={{ width: 40 }}><input type="checkbox" checked={checkedIds.size === filteredPlans.length && filteredPlans.length > 0} onChange={toggleCheckAll} /></th>
-                  <th>요금제명</th><th>월납부금액</th><th>기본료</th><th>할인</th><th>유형</th><th>데이터</th><th>음성</th><th>상태</th>
+                  <th>요금제명</th><th>월납부금액</th><th>기본료</th><th>할인</th><th>유형</th><th>데이터</th><th>음성</th>
+                  {customPlanFields.map(f => <th key={f.key}>{f.label}</th>)}
+                  <th>상태</th>
                 </tr>
               </thead>
               <tbody>
@@ -227,12 +263,13 @@ function PlansContent() {
                   <tr key={p.id} onClick={() => openEdit(p)} style={{ cursor: "pointer" }}>
                     <td onClick={(e) => e.stopPropagation()}><input type="checkbox" checked={checkedIds.has(p.id)} onChange={() => toggleCheck(p.id)} /></td>
                     <td style={{ fontWeight: 600 }}>{p.name}</td>
-                    <td style={{ fontFamily: "var(--font-mono)" }}>{fmt(p.monthly)}</td>
-                    <td style={{ fontFamily: "var(--font-mono)" }}>{fmt(p.base_fee)}</td>
-                    <td style={{ fontFamily: "var(--font-mono)", color: "var(--danger)" }}>{fmt(p.discount)}</td>
+                    <td style={{ fontFamily: "var(--font-mono)" }}>{formatPrice(p.monthly)}</td>
+                    <td style={{ fontFamily: "var(--font-mono)" }}>{formatPrice(p.base_fee)}</td>
+                    <td style={{ fontFamily: "var(--font-mono)", color: "var(--danger)" }}>{formatPrice(p.discount)}</td>
                     <td>{p.type === "postpaid" ? "후불" : "선불"}</td>
                     <td>{p.data}</td>
                     <td>{p.voice}</td>
+                    {customPlanFields.map(f => <td key={f.key}>{getExtra(p, f.key)}</td>)}
                     <td>{p.is_active ? "✅" : "❌"}</td>
                   </tr>
                 ))}
@@ -253,22 +290,14 @@ function PlansContent() {
                     </span>
                   </div>
                   <div className={styles.cardBody}>
-                    <div className={styles.cardField}>
-                      <span className={styles.cardFieldLabel}>월 요금</span>
-                      <span className={styles.cardFieldValue} style={{ color: "var(--brand)", fontFamily: "var(--font-mono)", fontWeight: 700 }}>{fmt(p.monthly)}</span>
-                    </div>
-                    <div className={styles.cardField}>
-                      <span className={styles.cardFieldLabel}>할인</span>
-                      <span className={styles.cardFieldValue} style={{ color: "var(--danger)", fontFamily: "var(--font-mono)" }}>{fmt(p.discount)}</span>
-                    </div>
-                    <div className={styles.cardField}>
-                      <span className={styles.cardFieldLabel}>데이터</span>
-                      <span className={styles.cardFieldValue}>{p.data}</span>
-                    </div>
-                    <div className={styles.cardField}>
-                      <span className={styles.cardFieldLabel}>음성</span>
-                      <span className={styles.cardFieldValue}>{p.voice}</span>
-                    </div>
+                    <div className={styles.cardField}><span className={styles.cardFieldLabel}>월 요금</span><span className={styles.cardFieldValue} style={{ color: "var(--brand)", fontFamily: "var(--font-mono)", fontWeight: 700 }}>{formatPrice(p.monthly)}</span></div>
+                    <div className={styles.cardField}><span className={styles.cardFieldLabel}>할인</span><span className={styles.cardFieldValue} style={{ color: "var(--danger)", fontFamily: "var(--font-mono)" }}>{formatPrice(p.discount)}</span></div>
+                    <div className={styles.cardField}><span className={styles.cardFieldLabel}>데이터</span><span className={styles.cardFieldValue}>{p.data}</span></div>
+                    <div className={styles.cardField}><span className={styles.cardFieldLabel}>음성</span><span className={styles.cardFieldValue}>{p.voice}</span></div>
+                    {customPlanFields.map(f => {
+                      const v = getExtra(p, f.key);
+                      return v ? <div key={f.key} className={styles.cardField}><span className={styles.cardFieldLabel}>{f.label}</span><span className={styles.cardFieldValue}>{v}</span></div> : null;
+                    })}
                   </div>
                 </div>
               ))}
@@ -278,7 +307,7 @@ function PlansContent() {
 
         {/* Modal */}
         {modal && (
-          <div className={styles.overlay} onClick={() => setModal(null)}>
+          <div className={styles.overlay}>
             <div className={styles.modal} onClick={(e) => e.stopPropagation()} onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); handleSave(); } }}>
               <div className={styles.modalHeader}>
                 <h2 className={styles.modalTitle}>{modal === "create" ? "요금제 추가" : "요금제 수정"}</h2>
@@ -338,6 +367,31 @@ function PlansContent() {
                 </div>
               </div>
 
+              {/* 커스텀 요금제 필드 */}
+              {customPlanFields.length > 0 && (
+                <>
+                  <div style={{ borderTop: "2px solid #D1FAE5", marginTop: 12, paddingTop: 12 }}>
+                    <span style={{ fontSize: 13, fontWeight: 800, color: "#059669" }}>추가 항목</span>
+                  </div>
+                  {customPlanFields.map((f, i) => (
+                    i % 2 === 0 ? (
+                      <div className={styles.formRow} key={f.key}>
+                        <div className={styles.formGroup}>
+                          <label className={styles.formLabel}>{f.label}</label>
+                          <input className={styles.formInput} value={extraForm[f.key] || ""} onChange={(e) => setExtraForm(prev => ({ ...prev, [f.key]: e.target.value }))} />
+                        </div>
+                        {customPlanFields[i + 1] && (
+                          <div className={styles.formGroup}>
+                            <label className={styles.formLabel}>{customPlanFields[i + 1].label}</label>
+                            <input className={styles.formInput} value={extraForm[customPlanFields[i + 1].key] || ""} onChange={(e) => setExtraForm(prev => ({ ...prev, [customPlanFields[i + 1].key]: e.target.value }))} />
+                          </div>
+                        )}
+                      </div>
+                    ) : null
+                  ))}
+                </>
+              )}
+
               <div className={styles.formGroup}>
                 <label className={styles.formLabel}>정렬 순서</label>
                 <input className={styles.formInput} type="number" value={form.sort_order} onChange={(e) => setForm({ ...form, sort_order: Number(e.target.value) })} />
@@ -346,6 +400,44 @@ function PlansContent() {
               <div className={styles.modalActions}>
                 <button className={styles.cancelBtn} onClick={() => setModal(null)}>취소</button>
                 <button className={styles.saveBtn} onClick={handleSave}>저장</button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* 항목 관리 모달 */}
+        {fieldModal && (
+          <div className={styles.overlay} onClick={() => setFieldModal(false)}>
+            <div className={styles.modal} onClick={e => e.stopPropagation()} style={{ maxWidth: 480 }}>
+              <div className={styles.modalHeader}>
+                <h2 className={styles.modalTitle}>요금제 항목 관리</h2>
+                <button className={styles.modalClose} onClick={() => setFieldModal(false)}>✕</button>
+              </div>
+
+              <div style={{ display: "flex", flexDirection: "column", gap: 6, marginBottom: 16 }}>
+                {editingFields.map((f, i) => {
+                  const isDefault = DEFAULT_PLAN_KEYS.has(f.key);
+                  return (
+                    <div key={f.key} style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 10px", background: isDefault ? "#F8FAFC" : "#F0FDF4", borderRadius: 8, border: isDefault ? "1px solid #E8ECF1" : "1px solid #BBF7D0" }}>
+                      <input value={f.label} onChange={e => setEditingFields(prev => prev.map((pf, idx) => idx === i ? { ...pf, label: e.target.value } : pf))}
+                        placeholder="항목명" style={{ flex: 1, padding: "6px 10px", border: "1px solid #E2E8F0", borderRadius: 6, fontSize: 13, outline: "none", background: "white" }} />
+                      {isDefault
+                        ? <span style={{ fontSize: 10, color: "var(--text-3)", fontWeight: 600, whiteSpace: "nowrap" }}>기본</span>
+                        : <button onClick={() => setEditingFields(prev => prev.filter((_, idx) => idx !== i))} style={{ fontSize: 14, color: "#DC2626", cursor: "pointer", fontWeight: 700 }}>✕</button>
+                      }
+                    </div>
+                  );
+                })}
+              </div>
+
+              <button onClick={() => setEditingFields(prev => [...prev, { key: `plan_custom_${Date.now()}`, label: "" }])}
+                style={{ width: "100%", padding: "10px", background: "#F0FDF4", color: "#059669", borderRadius: 8, fontSize: 13, fontWeight: 700, cursor: "pointer", border: "1px dashed #BBF7D0", marginBottom: 16 }}>
+                + 항목 추가
+              </button>
+
+              <div className={styles.modalActions}>
+                <button className={styles.cancelBtn} onClick={() => setFieldModal(false)}>취소</button>
+                <button className={styles.saveBtn} onClick={handleSaveFields}>저장</button>
               </div>
             </div>
           </div>

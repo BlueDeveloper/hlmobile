@@ -68,7 +68,8 @@ export async function fetchCarriers(activeOnly = true, parent?: string | null): 
   return res.data || [];
 }
 
-export async function fetchCarrierTree(activeOnly = true): Promise<Carrier[]> {
+export async function fetchCarrierTree(activeOnly = true, skipCache = false): Promise<Carrier[]> {
+  if (skipCache) cache.clear();
   const params = new URLSearchParams({ tree: "1" });
   if (!activeOnly) params.set("active", "0");
   const res = await request<Carrier[]>(`/api/carriers?${params.toString()}`);
@@ -83,14 +84,14 @@ export async function createCarrier(data: Partial<Carrier>): Promise<ApiResponse
 }
 
 export async function updateCarrier(id: string, data: Partial<Carrier>): Promise<ApiResponse<void>> {
-  return request(`/api/carriers/${id}`, {
+  return request(`/api/carriers/${encodeURIComponent(id)}`, {
     method: "PUT",
     body: JSON.stringify(data),
   });
 }
 
 export async function deleteCarrier(id: string): Promise<ApiResponse<void>> {
-  return request(`/api/carriers/${id}`, { method: "DELETE" });
+  return request(`/api/carriers/${encodeURIComponent(id)}`, { method: "DELETE" });
 }
 
 // Plans
@@ -155,7 +156,7 @@ export async function fetchNotice(id: number): Promise<Notice | null> {
   return res.data || null;
 }
 
-export async function createNotice(data: { title: string; content: string; isPinned?: boolean }): Promise<ApiResponse<{ id: number }>> {
+export async function createNotice(data: { title: string; content: string; isPinned?: boolean; attachments?: string }): Promise<ApiResponse<{ id: number }>> {
   return request("/api/notices", { method: "POST", body: JSON.stringify(data) });
 }
 
@@ -232,7 +233,8 @@ export async function fetchDashboard(): Promise<Record<string, unknown>> {
 }
 
 // Applications
-export async function fetchApplications(): Promise<Application[]> {
+export async function fetchApplications(skipCache = false): Promise<Application[]> {
+  if (skipCache) cache.delete("/api/applications");
   const res = await request<Application[]>("/api/applications");
   return res.data || [];
 }
@@ -243,6 +245,16 @@ export async function createApplication(data: Record<string, unknown>): Promise<
 
 export async function deleteApplication(id: number): Promise<ApiResponse<void>> {
   return request(`/api/applications/${id}`, { method: "DELETE" });
+}
+
+// Site Settings
+export async function fetchSettings(): Promise<Record<string, string>> {
+  const res = await request<Record<string, string>>("/api/settings");
+  return res.data || {};
+}
+
+export async function updateSettings(data: Record<string, string>): Promise<ApiResponse<void>> {
+  return request("/api/settings", { method: "PUT", body: JSON.stringify(data) });
 }
 
 // Crawl

@@ -58,6 +58,7 @@ export default function DashboardPage() {
           <Link href="/admin/form-settings" className={styles.sidebarLink}>📝 신청서설정</Link>
           <Link href="/admin/notices" className={styles.sidebarLink}>📢 공지사항</Link>
           <Link href="/admin/inquiries" className={styles.sidebarLink}>💬 문의</Link>
+          <Link href="/admin/site-settings" className={styles.sidebarLink}>⚙️ 사이트설정</Link>
         </nav>
         <div className={styles.sidebarLogout}><button className={styles.logoutBtn} onClick={handleLogout}>로그아웃</button></div>
       </aside>

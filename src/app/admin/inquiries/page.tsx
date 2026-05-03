@@ -68,6 +68,7 @@ export default function AdminInquiriesPage() {
           <Link href="/admin/form-settings" className={styles.sidebarLink}>📝 신청서설정</Link>
           <Link href="/admin/notices" className={styles.sidebarLink}>📢 공지사항</Link>
           <Link href="/admin/inquiries" className={`${styles.sidebarLink} ${styles.sidebarLinkActive}`}>💬 문의</Link>
+          <Link href="/admin/site-settings" className={styles.sidebarLink}>⚙️ 사이트설정</Link>
         </nav>
         <div className={styles.sidebarLogout}><button className={styles.logoutBtn} onClick={handleLogout}>로그아웃</button></div>
       </aside>
@@ -131,7 +132,7 @@ export default function AdminInquiriesPage() {
         )}
 
         {modal && (
-          <div className={styles.overlay} onClick={() => setModal(null)}>
+          <div className={styles.overlay}>
             <div className={styles.modal} onClick={(e) => e.stopPropagation()} onKeyDown={(e) => { if (e.key === "Enter" && e.ctrlKey) { e.preventDefault(); handleReply(); } }}>
               <div className={styles.modalHeader}>
                 <h2 className={styles.modalTitle}>문의 상세 / 답변</h2>

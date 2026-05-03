@@ -17,7 +17,7 @@ export default function CarriersPage() {
   const [checkedIds, setCheckedIds] = useState<Set<string>>(new Set());
   const [modal, setModal] = useState<"create-mno" | "create-mvno" | "edit" | null>(null);
   const [editing, setEditing] = useState<Carrier | null>(null);
-  const [form, setForm] = useState({ id: "", icon: "", title: "", description: "", forms: "", sort_order: 0, paymentType: "both" as string });
+  const [form, setForm] = useState({ id: "", icon: "", title: "", description: "", forms: "", sort_order: 0, paymentType: "both" as string, useLink: false, linkUrl: "" });
   const [uploading, setUploading] = useState(false);
   const router = useRouter();
 
@@ -25,11 +25,16 @@ export default function CarriersPage() {
     const token = sessionStorage.getItem("admin_token");
     if (!token) { router.push("/admin"); return; }
     setLoading(true);
-    const data = await fetchCarrierTree(false);
-    setTree(data);
-    setActiveMno((prev) => prev || (data.length > 0 ? data[0].id : ""));
-    setLoading(false);
-  }, [router]);
+    try {
+      const data = await fetchCarrierTree(false);
+      setTree(data);
+      setActiveMno((prev) => prev || (data.length > 0 ? data[0].id : ""));
+    } catch {
+      toast("데이터를 불러오는데 실패했습니다.", "error");
+    } finally {
+      setLoading(false);
+    }
+  }, [router, toast]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -37,17 +42,18 @@ export default function CarriersPage() {
   const mvnoList = activeMnoData?.children || [];
 
   const openCreateMno = () => {
-    setForm({ id: "", icon: "", title: "", description: "", forms: "", sort_order: tree.length + 1, paymentType: "both" });
+    setForm({ id: "", icon: "", title: "", description: "", forms: "", sort_order: tree.length + 1, paymentType: "both", useLink: false, linkUrl: "" });
     setEditing(null); setModal("create-mno");
   };
 
   const openCreateMvno = () => {
-    setForm({ id: "", icon: "", title: "", description: "", forms: "가입신청서", sort_order: mvnoList.length + 1, paymentType: "both" });
+    setForm({ id: "", icon: "", title: "", description: "", forms: "가입신청서", sort_order: mvnoList.length + 1, paymentType: "both", useLink: false, linkUrl: "" });
     setEditing(null); setModal("create-mvno");
   };
 
   const openEdit = (c: Carrier) => {
-    setForm({ id: c.id, icon: c.icon, title: c.title, description: c.description, forms: c.forms, sort_order: c.sort_order, paymentType: c.payment_type || "both" });
+    const hasLink = c.forms?.startsWith("http");
+    setForm({ id: c.id, icon: c.icon, title: c.title, description: c.description, forms: c.forms, sort_order: c.sort_order, paymentType: c.payment_type || "both", useLink: hasLink, linkUrl: hasLink ? c.forms : "" });
     setEditing(c); setModal("edit");
   };
 
@@ -56,14 +62,16 @@ export default function CarriersPage() {
     if (modal !== "edit" && !form.id.trim()) { toast("ID를 입력해주세요.", "error"); return; }
     if ((modal === "create-mvno" || (modal === "edit" && editing?.parent_id)) && !form.paymentType) { toast("결제 방식을 선택해주세요.", "error"); return; }
 
+    const saveForm = { ...form, forms: form.useLink ? form.linkUrl : form.forms };
+
     if (modal === "create-mno") {
-      const res = await createCarrier({ ...form, parentId: null } as unknown as Partial<Carrier>);
+      const res = await createCarrier({ ...saveForm, parentId: null } as unknown as Partial<Carrier>);
       if (!res.ok) { toast(res.error || "오류가 발생했습니다.", "error"); return; }
     } else if (modal === "create-mvno") {
-      const res = await createCarrier({ ...form, parentId: activeMno } as unknown as Partial<Carrier>);
+      const res = await createCarrier({ ...saveForm, parentId: activeMno } as unknown as Partial<Carrier>);
       if (!res.ok) { toast(res.error || "오류가 발생했습니다.", "error"); return; }
     } else if (modal === "edit" && editing) {
-      const { id: _id, ...rest } = form;
+      const { id: _id, ...rest } = saveForm;
       await updateCarrier(editing.id, rest as unknown as Partial<Carrier>);
     }
     setModal(null); load();
@@ -104,6 +112,7 @@ export default function CarriersPage() {
           <Link href="/admin/form-settings" className={styles.sidebarLink}>📝 신청서설정</Link>
           <Link href="/admin/notices" className={styles.sidebarLink}>📢 공지사항</Link>
           <Link href="/admin/inquiries" className={styles.sidebarLink}>💬 문의</Link>
+          <Link href="/admin/site-settings" className={styles.sidebarLink}>⚙️ 사이트설정</Link>
         </nav>
         <div className={styles.sidebarLogout}><button className={styles.logoutBtn} onClick={handleLogout}>로그아웃</button></div>
       </aside>
@@ -192,7 +201,9 @@ export default function CarriersPage() {
                               {mvno.payment_type === "postpaid" ? "후불" : mvno.payment_type === "prepaid" ? "선불" : "후불+선불"}
                             </span>
                           </td>
-                          <td>{mvno.is_active ? "✅" : "❌"}</td>
+                          <td onClick={e => { e.stopPropagation(); updateCarrier(mvno.id, { is_active: mvno.is_active ? 0 : 1 } as unknown as Partial<Carrier>).then(() => load()); }}>
+                            <span style={{ cursor: "pointer", fontSize: 18 }}>{mvno.is_active ? "✅" : "❌"}</span>
+                          </td>
                         </tr>
                       ))}
                     </tbody>
@@ -217,6 +228,7 @@ export default function CarriersPage() {
                     <div className={styles.cardBody}>
                       <div className={styles.cardField}><span className={styles.cardFieldLabel}>ID</span><span className={styles.cardFieldValue}>{mvno.id}</span></div>
                       <div className={styles.cardField}><span className={styles.cardFieldLabel}>설명</span><span className={styles.cardFieldValue}>{mvno.description}</span></div>
+                      <div className={styles.cardField}><span className={styles.cardFieldLabel}>상태</span><span className={styles.cardFieldValue} onClick={e => { e.stopPropagation(); updateCarrier(mvno.id, { is_active: mvno.is_active ? 0 : 1 } as unknown as Partial<Carrier>).then(() => load()); }} style={{ cursor: "pointer" }}>{mvno.is_active ? "✅ 사용" : "❌ 비사용"}</span></div>
                     </div>
                   </div>
                 ))}
@@ -227,7 +239,7 @@ export default function CarriersPage() {
 
         {/* Modal */}
         {modal && (
-          <div className={styles.overlay} onClick={() => setModal(null)}>
+          <div className={styles.overlay}>
             <div className={styles.modal} onClick={(e) => e.stopPropagation()} onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); handleSave(); } }}>
               <div className={styles.modalHeader}>
                 <h2 className={styles.modalTitle}>
@@ -284,15 +296,22 @@ export default function CarriersPage() {
                 </div>
               ) : null}
 
-              <div className={styles.formRow}>
-                <div className={styles.formGroup}>
-                  <label className={styles.formLabel}>양식</label>
-                  <input className={styles.formInput} value={form.forms} onChange={(e) => setForm({ ...form, forms: e.target.value })} placeholder="예: 가입신청서" />
-                </div>
-                <div className={styles.formGroup}>
-                  <label className={styles.formLabel}>정렬 순서</label>
-                  <input className={styles.formInput} type="number" value={form.sort_order} onChange={(e) => setForm({ ...form, sort_order: Number(e.target.value) })} />
-                </div>
+              <div className={styles.formGroup}>
+                <label style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer", marginBottom: 6 }}>
+                  <input type="checkbox" checked={form.useLink} onChange={e => setForm({ ...form, useLink: e.target.checked })} />
+                  <span className={styles.formLabel} style={{ margin: 0 }}>외부 링크 사용</span>
+                </label>
+                <p style={{ fontSize: 11, color: "var(--text-3)", margin: "0 0 8px", lineHeight: 1.5 }}>
+                  체크하면 사용자가 이 통신사를 클릭할 때 신청서 작성 대신 입력한 URL로 이동합니다.
+                </p>
+                {form.useLink && (
+                  <input className={styles.formInput} value={form.linkUrl} onChange={e => setForm({ ...form, linkUrl: e.target.value })} placeholder="https://example.com/form" />
+                )}
+              </div>
+
+              <div className={styles.formGroup}>
+                <label className={styles.formLabel}>정렬 순서</label>
+                <input className={styles.formInput} type="number" value={form.sort_order} onChange={(e) => setForm({ ...form, sort_order: Number(e.target.value) })} style={{ width: 100 }} />
               </div>
 
               <div className={styles.modalActions}>
