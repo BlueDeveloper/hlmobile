@@ -89,7 +89,7 @@ export async function handleCrawl(request: Request, env: Env): Promise<Response>
     // 알뜰폰 허브 목록 페이지 (공개 페이지)
     const res = await fetch("https://www.mvnohub.kr/product/products.do", {
       headers: {
-        "User-Agent": "Mozilla/5.0 (compatible; hlmobile-admin/1.0; +https://hlmobile-1ue.pages.dev)",
+        "User-Agent": "Mozilla/5.0 (compatible; hlmobile-admin/1.0; +https://hlmobile.kr)",
         "Accept": "text/html",
       },
     });

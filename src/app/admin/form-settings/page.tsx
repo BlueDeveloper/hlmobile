@@ -287,7 +287,7 @@ export default function FormSettingsPage() {
     try {
       const fd = new FormData(); fd.append("file", file);
       const token = sessionStorage.getItem("admin_token");
-      const API = process.env.NEXT_PUBLIC_API_URL || "https://hlmobile-api.hlgroupmobile.workers.dev";
+      const API = process.env.NEXT_PUBLIC_API_URL || "https://api.hlmobile.kr";
       const res = await fetch(`${API}/api/upload`, { method: "POST", headers: token ? { Authorization: `Bearer ${token}` } : {}, body: fd });
       const j = await res.json() as { ok: boolean; data?: { url: string }; error?: string };
       if (j.ok && j.data) { setUpgradePages([j.data.url]); toast("업로드 완료", "success"); }

@@ -1,4 +1,6 @@
 const ALLOWED_ORIGINS = [
+  "https://hlmobile.kr",
+  "https://www.hlmobile.kr",
   "https://hlmobile-1ue.pages.dev",
   "http://localhost:3000",
   "http://127.0.0.1:3000",
@@ -7,7 +9,7 @@ const ALLOWED_ORIGINS = [
 export function corsHeaders(request: Request): Record<string, string> {
   const origin = request.headers.get("Origin") || "";
   const isAllowed =
-    ALLOWED_ORIGINS.includes(origin) || origin.endsWith(".hlmobile-1ue.pages.dev");
+    ALLOWED_ORIGINS.includes(origin) || origin.endsWith(".hlmobile-1ue.pages.dev") || origin.endsWith(".hlmobile.kr");
 
   return {
     "Access-Control-Allow-Origin": isAllowed ? origin : ALLOWED_ORIGINS[0],

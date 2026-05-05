@@ -254,7 +254,7 @@ function FormContent() {
                           }
                         } catch {}
                       }
-                      const API = process.env.NEXT_PUBLIC_API_URL || "https://hlmobile-api.hlgroupmobile.workers.dev";
+                      const API = process.env.NEXT_PUBLIC_API_URL || "https://api.hlmobile.kr";
                       const templateUrl = mvnoData.form_template.startsWith("http")
                         ? mvnoData.form_template
                         : `${API}${mvnoData.form_template}`;

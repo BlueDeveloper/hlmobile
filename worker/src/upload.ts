@@ -26,7 +26,7 @@ export async function handleUpload(request: Request, env: Env): Promise<Response
     httpMetadata: { contentType: file.type },
   });
 
-  const url = `https://hlmobile-api.hlgroupmobile.workers.dev/r2/${key}`;
+  const url = `https://api.hlmobile.kr/r2/${key}`;
   return json({ ok: true, data: { url, key } }, 201);
 }
 

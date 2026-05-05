@@ -57,7 +57,7 @@ export default function AdminApplicationsPage() {
 
     const positions = parseJsonSafe<{ key: string; xPt?: number; yPt?: number; fontSize: number; page: number }[]>(mvno.form_fields, []);
     const excludedPages = parseJsonSafe<number[]>(mvno.excluded_pages, []);
-    const API = process.env.NEXT_PUBLIC_API_URL || "https://hlmobile-api.hlgroupmobile.workers.dev";
+    const API = process.env.NEXT_PUBLIC_API_URL || "https://api.hlmobile.kr";
     const templateUrl = mvno.form_template.startsWith("http") ? mvno.form_template : `${API}${mvno.form_template}`;
 
     // 커스텀 사용자 필드 (extra_data)
