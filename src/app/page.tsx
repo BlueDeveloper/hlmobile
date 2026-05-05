@@ -168,7 +168,7 @@ export default function Home() {
                 <div className={styles.noticeEmpty}>등록된 공지가 없습니다.</div>
               ) : (
                 notices.map((n) => (
-                  <Link href="/notices" key={n.id} className={styles.noticeItem}>
+                  <Link href={`/notices?id=${n.id}`} key={n.id} className={styles.noticeItem}>
                     <div className={styles.noticeItemLeft}>
                       {n.is_pinned ? <span className={styles.noticePinBadge}>공지</span> : null}
                       <span className={styles.noticeItemTitle}>{n.title}</span>
