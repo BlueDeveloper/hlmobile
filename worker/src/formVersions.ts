@@ -20,9 +20,12 @@ export async function handleFormVersions(request: Request, env: Env, path: strin
 
   // POST /api/form-versions — 새 버전 생성
   if (request.method === "POST" && parts.length === 0) {
-    const body = await request.json<{
-      carrierId: string; label: string; pages?: string[]; pdfUrl?: string;
-    }>();
+    let body: { carrierId: string; label: string; pages?: string[]; pdfUrl?: string };
+    try {
+      body = await request.json();
+    } catch {
+      return json({ ok: false, error: "잘못된 요청 형식입니다" }, 400);
+    }
     const { carrierId, label, pages, pdfUrl } = body;
     if (!carrierId) return json({ ok: false, error: "carrierId는 필수입니다" }, 400);
     if (!pdfUrl && (!pages || pages.length === 0)) {
@@ -59,12 +62,13 @@ export async function handleFormVersions(request: Request, env: Env, path: strin
     // 선택한 버전 활성
     await env.DB.prepare("UPDATE form_versions SET is_active = 1 WHERE id = ?").bind(id).run();
 
-    // carriers 테이블에도 반영 (PDF URL 또는 첫 이미지)
-    const pages = JSON.parse(ver.pages) as string[];
+    // carriers 테이블에도 반영 (PDF URL만 변경, 좌표(form_fields)는 유지)
+    let pages: string[] = [];
+    try { pages = JSON.parse(ver.pages) as string[]; } catch { /* malformed pages data */ }
     const templateUrl = pages[0] || null;
     await env.DB.prepare(
-      "UPDATE carriers SET form_template = ?, form_fields = ? WHERE id = ?"
-    ).bind(templateUrl, ver.pages, ver.carrier_id).run();
+      "UPDATE carriers SET form_template = ? WHERE id = ?"
+    ).bind(templateUrl, ver.carrier_id).run();
 
     return json({ ok: true });
   }
@@ -83,10 +87,10 @@ export async function handleFormVersions(request: Request, env: Env, path: strin
       }
     } catch { /* ignore */ }
 
-    // 활성 버전이었으면 carriers 테이블도 초기화
+    // 활성 버전이었으면 carriers 테이블의 template만 초기화 (좌표는 유지)
     if (ver.is_active) {
       await env.DB.prepare(
-        "UPDATE carriers SET form_template = NULL, form_fields = NULL WHERE id = ?"
+        "UPDATE carriers SET form_template = NULL WHERE id = ?"
       ).bind(ver.carrier_id).run();
     }
 
@@ -113,9 +117,9 @@ export async function handleFormVersions(request: Request, env: Env, path: strin
     // DB 레코드 전부 삭제
     await env.DB.prepare("DELETE FROM form_versions WHERE carrier_id = ?").bind(carrierId).run();
 
-    // carriers 테이블 초기화
+    // carriers 테이블 template만 초기화 (좌표는 유지)
     await env.DB.prepare(
-      "UPDATE carriers SET form_template = NULL, form_fields = NULL WHERE id = ?"
+      "UPDATE carriers SET form_template = NULL WHERE id = ?"
     ).bind(carrierId).run();
 
     return json({ ok: true });

@@ -6,11 +6,70 @@ import { useSearchParams } from "next/navigation";
 import Header from "@/components/Header";
 import { useToast } from "@/components/Toast";
 import { fetchCarrierTree, fetchPlans, createApplication } from "@/lib/api";
-import { formatPhone, formatBirth, isValidBirth } from "@/lib/utils";
-import type { Carrier, Plan } from "@/types";
+import { formatPhone, formatBirth, isValidBirth, formatPrice, parseJsonSafe } from "@/lib/utils";
+import { fillAndOpenPdf } from "@/lib/pdfClient";
+import type { Carrier, Plan, FormFieldConfig } from "@/types";
 import styles from "./page.module.css";
 
 const TOTAL_STEPS = 5; // 대분류 → 알뜰폰 → 요금제 → 정보 → 확인
+
+// 필드 key별 테스트 기본값
+const DEFAULT_VALUES: Record<string, string> = {
+  usimSerial: "8982001234567890",
+  customerType: "개인",
+  subscriberName: "홍길동",
+  contactNumber: "010-1234-5678",
+  birthDate: "1990-01-15",
+  idNumber: "900115-1234567",
+  nationality: "대한민국",
+  address: "(06236) 서울특별시 강남구 테헤란로 123",
+  addressDetail: "456호",
+  activationType: "번호이동",
+  desiredNumber: "010-9876-5432",
+  storeName: "HL모바일 강남점",
+};
+
+function buildDefaultData(fields: FormFieldConfig[]): Record<string, string> {
+  const data: Record<string, string> = {};
+  for (const f of fields) {
+    if (DEFAULT_VALUES[f.key]) {
+      data[f.key] = DEFAULT_VALUES[f.key];
+    } else if (f.type === "select" && f.options?.length) {
+      data[f.key] = f.options[0];
+    } else if (f.type === "phone") {
+      data[f.key] = "010-0000-0000";
+    } else if (f.type === "date") {
+      data[f.key] = "2000-01-01";
+    } else if (f.type === "address") {
+      data[f.key] = "(00000) 서울특별시 강남구";
+    } else if (f.type === "composite" && f.subFields) {
+      for (const sub of f.subFields) { data[sub.key] = sub.label; }
+    } else if (f.type === "text") {
+      data[f.key] = f.label;
+    } else {
+      data[f.key] = f.label || "";
+    }
+  }
+  return data;
+}
+
+const FALLBACK_FIELDS: FormFieldConfig[] = [
+  { key: "usimSerial", label: "USIM 일련번호", type: "text", required: false },
+  { key: "customerType", label: "고객유형", type: "select", required: true, options: ["개인","외국인","청소년","개인사업자","법인사업자"] },
+  { key: "subscriberName", label: "가입자명", type: "text", required: true },
+  { key: "contactNumber", label: "개통번호/연락번호", type: "phone", required: true },
+  { key: "birthDate", label: "생년월일", type: "date", required: true },
+  { key: "idNumber", label: "신분증번호/여권번호", type: "text", required: false },
+  { key: "nationality", label: "국적", type: "text", required: false },
+  { key: "address", label: "주소", type: "address", required: false },
+  { key: "addressDetail", label: "상세주소", type: "text", required: false },
+  { key: "activationType", label: "개통구분", type: "select", required: true, options: ["신규가입","번호이동","기기변경"] },
+  { key: "desiredNumber", label: "희망번호", type: "text", required: false, showWhen: { field: "activationType", value: "신규가입" } },
+  { key: "transferType", label: "이동 유형", type: "select", required: true, options: ["선불", "후불"], showWhen: { field: "activationType", value: "번호이동" } },
+  { key: "transferNumber", label: "이동할 번호", type: "phone", required: true, showWhen: { field: "activationType", value: "번호이동" } },
+  { key: "previousCarrier", label: "이전 통신사", type: "text", required: false, showWhen: { field: "activationType", value: "번호이동" } },
+  { key: "storeName", label: "판매점명", type: "text", required: false },
+];
 
 function FormContent() {
   const { toast } = useToast();
@@ -29,21 +88,9 @@ function FormContent() {
   const [selectedPlan, setSelectedPlan] = useState<Plan | null>(null);
   const [plansLoading, setPlansLoading] = useState(false);
 
-  // 신청서 정보 (테스트용 하드코딩)
-  const [formData, setFormData] = useState({
-    usimSerial: "8982001234567890",
-    customerType: "개인",
-    contactNumber: "010-1234-5678",
-    subscriberName: "홍길동",
-    birthDate: "1990-01-15",
-    idNumber: "900115-1234567",
-    nationality: "대한민국",
-    address: "(06236) 서울특별시 강남구 테헤란로 123",
-    addressDetail: "456호",
-    activationType: "번호이동",
-    desiredNumber: "010-9876-5432",
-    storeName: "HL모바일 강남점",
-  });
+  // 신청서 정보 (동적 form_config 기반)
+  const [formData, setFormData] = useState<Record<string, string>>({});
+  const [formFields, setFormFields] = useState<FormFieldConfig[]>([]);
 
   const [submitted, setSubmitted] = useState(false);
 
@@ -67,32 +114,68 @@ function FormContent() {
     }).catch(() => {});
   }, [initialCarrier]);
 
-  const mvnoList = tree.find(m => m.id === selectedMno)?.children || [];
+  const mvnoList = (tree.find(m => m.id === selectedMno)?.children || []).filter(c => c.is_active);
 
   // 요금제 로드 (통신사 변경 시)
   const loadPlans = useCallback(async (carrierId: string) => {
     if (!carrierId) return;
     setPlansLoading(true);
-    const data = await fetchPlans(carrierId);
-    setAllPlans(data);
-    setPlansLoading(false);
+    try {
+      const data = await fetchPlans(carrierId);
+      setAllPlans(data);
+    } catch {
+      setAllPlans([]);
+    } finally {
+      setPlansLoading(false);
+    }
   }, []);
 
   useEffect(() => {
     if (selectedCarrier) loadPlans(selectedCarrier);
-  }, [selectedCarrier, loadPlans]);
+    // form_config에서 전체 필드 로드
+    const mvno = tree.flatMap(m => m.children || []).find(c => c.id === selectedCarrier);
+    if (mvno?.form_config) {
+      try {
+        const parsed = JSON.parse(mvno.form_config);
+        const fields: FormFieldConfig[] = Array.isArray(parsed) ? parsed : parsed.fields || [];
+        // todayYear/Month/Day, 자동 필드는 입력 UI에서 제외
+        const autoKeys = new Set(["todayYear", "todayMonth", "todayDay", "separator"]);
+        const visible = fields.filter(f => !autoKeys.has(f.key));
+        setFormFields(visible);
+        // 필드 타입별 테스트 기본값
+        setFormData(buildDefaultData(visible));
+      } catch {
+        setFormFields(FALLBACK_FIELDS);
+        setFormData(buildDefaultData(FALLBACK_FIELDS));
+      }
+    } else {
+      setFormFields(FALLBACK_FIELDS);
+      setFormData(buildDefaultData(FALLBACK_FIELDS));
+    }
+  }, [selectedCarrier, loadPlans, tree]);
 
-  // 필터링된 요금제
+  // 정렬
+  const [sortKey, setSortKey] = useState<string | null>(null);
+  const [sortDir, setSortDir] = useState<"asc" | "desc">("asc");
+  const toggleSort = (key: string) => { if (sortKey === key) setSortDir(d => d === "asc" ? "desc" : "asc"); else { setSortKey(key); setSortDir("asc"); } };
+
+  // 필터링 + 정렬된 요금제
   const filteredPlans = useMemo(() => {
-    return allPlans.filter((p) => p.type === paymentType);
-  }, [allPlans, paymentType]);
+    const filtered = allPlans.filter((p) => p.type === paymentType);
+    if (!sortKey) return filtered;
+    return [...filtered].sort((a, b) => {
+      const av = a[sortKey as keyof Plan]; const bv = b[sortKey as keyof Plan];
+      const cmp = typeof av === "number" && typeof bv === "number" ? av - bv : String(av).localeCompare(String(bv));
+      return sortDir === "asc" ? cmp : -cmp;
+    });
+  }, [allPlans, paymentType, sortKey, sortDir]);
 
   const canProceed = () => {
     switch (step) {
       case 1: return selectedMno !== "";
       case 2: return selectedCarrier !== "";
       case 3: return selectedPlan !== null;
-      case 4: return formData.subscriberName !== "" && formData.contactNumber !== "" && formData.birthDate !== "";
+      case 4: return formFields.filter(f => f.required && (!f.showWhen || (formData[f.showWhen.field] || "") === f.showWhen.value)).every(f => (formData[f.key] || "").trim() !== "");
       case 5: return true;
       default: return false;
     }
@@ -103,26 +186,28 @@ function FormContent() {
       case 1: if (!selectedMno) { toast("통신망을 선택해주세요.", "error"); return; } break;
       case 2: if (!selectedCarrier) { toast("알뜰폰 통신사를 선택해주세요.", "error"); return; } break;
       case 3: if (!selectedPlan) { toast("요금제를 선택해주세요.", "error"); return; } break;
-      case 4:
-        if (!formData.subscriberName.trim()) { toast("가입자명을 입력해주세요.", "error"); return; }
-        if (!formData.contactNumber.trim()) { toast("개통번호 연락번호를 입력해주세요.", "error"); return; }
-        if (!formData.birthDate.trim()) { toast("생년월일을 입력해주세요.", "error"); return; }
-        if (!isValidBirth(formData.birthDate.replace(/[^0-9]/g, ""))) { toast("생년월일 형식이 올바르지 않습니다. (YYYYMMDD)", "error"); return; }
-        if (!formData.customerType) { toast("고객유형을 선택해주세요.", "error"); return; }
-        if (!formData.activationType) { toast("개통구분을 선택해주세요.", "error"); return; }
+      case 4: {
+        const missing = formFields.find(f => f.required && (!f.showWhen || (formData[f.showWhen.field] || "") === f.showWhen.value) && !(formData[f.key] || "").trim());
+        if (missing) { toast(`${missing.label}을(를) 입력해주세요.`, "error"); return; }
+        if (formData.birthDate && !isValidBirth(formData.birthDate.replace(/[^0-9]/g, ""))) { toast("생년월일 형식이 올바르지 않습니다. (YYYYMMDD)", "error"); return; }
         break;
+      }
     }
     if (step === TOTAL_STEPS) {
       // DB에 신청서 저장
-      await createApplication({
-        carrierId: selectedCarrier,
-        carrierName,
-        planName: selectedPlan?.name || "",
-        planMonthly: selectedPlan?.monthly || 0,
-        paymentType,
-        ...formData,
-      });
-      setSubmitted(true);
+      try {
+        await createApplication({
+          carrierId: selectedCarrier,
+          carrierName,
+          planName: selectedPlan?.name || "",
+          planMonthly: selectedPlan?.monthly || 0,
+          paymentType,
+          ...formData,
+        });
+        setSubmitted(true);
+      } catch {
+        toast("신청서 저장에 실패했습니다. 다시 시도해주세요.", "error");
+      }
       return;
     }
     setStep(step + 1);
@@ -133,7 +218,7 @@ function FormContent() {
   const mnoName = tree.find(m => m.id === selectedMno)?.title || "";
   const carrierName = mvnoList.find((c) => c.id === selectedCarrier)?.title || selectedCarrier;
   const stepLabels = ["통신망", "통신사", "요금제", "정보", "확인"];
-  const formatPrice = (n: number) => n.toLocaleString() + "원";
+
 
   if (submitted) {
     return (
@@ -147,69 +232,64 @@ function FormContent() {
                 <h2>신청서가 완성되었습니다!</h2>
                 <p>아래 내용을 확인하고 출력하세요.</p>
                 <div className={styles.completeInfo}>
-                  <div className={styles.completeInfoRow}>
-                    <span className={styles.completeInfoLabel}>통신사</span>
-                    <span className={styles.completeInfoValue}>{carrierName}</span>
-                  </div>
-                  <div className={styles.completeInfoRow}>
-                    <span className={styles.completeInfoLabel}>요금제</span>
-                    <span className={styles.completeInfoValue}>{selectedPlan?.name}</span>
-                  </div>
-                  <div className={styles.completeInfoRow}>
-                    <span className={styles.completeInfoLabel}>월 요금</span>
-                    <span className={styles.completeInfoValue}>{selectedPlan ? formatPrice(selectedPlan.monthly) : ""}</span>
-                  </div>
-                  <div className={styles.completeInfoRow}>
-                    <span className={styles.completeInfoLabel}>가입자명</span>
-                    <span className={styles.completeInfoValue}>{formData.subscriberName}</span>
-                  </div>
-                  <div className={styles.completeInfoRow}>
-                    <span className={styles.completeInfoLabel}>생년월일</span>
-                    <span className={styles.completeInfoValue}>{formData.birthDate}</span>
-                  </div>
-                  <div className={styles.completeInfoRow}>
-                    <span className={styles.completeInfoLabel}>연락처</span>
-                    <span className={styles.completeInfoValue}>{formData.contactNumber}</span>
-                  </div>
-                  <div className={styles.completeInfoRow}>
-                    <span className={styles.completeInfoLabel}>고객유형</span>
-                    <span className={styles.completeInfoValue}>{formData.customerType}</span>
-                  </div>
+                  <div className={styles.completeInfoRow}><span className={styles.completeInfoLabel}>통신사</span><span className={styles.completeInfoValue}>{carrierName}</span></div>
+                  <div className={styles.completeInfoRow}><span className={styles.completeInfoLabel}>요금제</span><span className={styles.completeInfoValue}>{selectedPlan?.name}</span></div>
+                  <div className={styles.completeInfoRow}><span className={styles.completeInfoLabel}>월 요금</span><span className={styles.completeInfoValue}>{selectedPlan ? formatPrice(selectedPlan.monthly) : ""}</span></div>
+                  {formFields.filter(f => (formData[f.key] || "").trim()).map(f => (
+                    <div key={f.key} className={styles.completeInfoRow}><span className={styles.completeInfoLabel}>{f.label}</span><span className={styles.completeInfoValue}>{formData[f.key]}</span></div>
+                  ))}
                 </div>
                 <div className={styles.completeActions}>
                   <Link href="/" className={styles.btnHome}>홈으로</Link>
                   <button className={styles.btnPrint} onClick={async () => {
                     const mvnoData = tree.flatMap(m => m.children || []).find(c => c.id === selectedCarrier);
                     if (mvnoData?.form_template?.endsWith(".pdf")) {
-                      // PDF에 값 기입 후 새 탭
-                      const API = process.env.NEXT_PUBLIC_API_URL || "https://hlmobile-api.blueehdwp.workers.dev";
-                      const res = await fetch(`${API}/api/pdf-fill`, {
-                        method: "POST",
-                        headers: { "Content-Type": "application/json" },
-                        body: JSON.stringify({
-                          carrierId: selectedCarrier,
-                          values: {
-                            subscriberName: formData.subscriberName,
-                            birthDate: formData.birthDate,
-                            contactNumber: formData.contactNumber,
-                            customerType: formData.customerType,
-                            idNumber: formData.idNumber,
-                            nationality: formData.nationality,
-                            address: `${formData.address} ${formData.addressDetail}`,
-                            addressDetail: formData.addressDetail,
-                            activationType: formData.activationType,
-                            usimSerial: formData.usimSerial,
-                            desiredNumber: formData.desiredNumber,
-                            storeName: formData.storeName,
-                          },
-                        }),
-                      });
-                      if (res.ok) {
-                        const blob = await res.blob();
-                        const url = URL.createObjectURL(blob);
-                        window.open(url, "_blank");
-                      } else {
-                        window.print(); // fallback
+                      // 클라이언트 사이드 PDF 채우기 (한글 폰트 지원)
+                      let fieldPositions: { key: string; xPt?: number; yPt?: number; x?: number; y?: number; fontSize: number; page: number }[] = [];
+                      if (mvnoData?.form_fields) {
+                        try {
+                          const parsed = JSON.parse(mvnoData.form_fields);
+                          if (Array.isArray(parsed) && parsed.length > 0 && parsed[0]?.key) {
+                            fieldPositions = parsed;
+                          }
+                        } catch {}
+                      }
+                      const API = process.env.NEXT_PUBLIC_API_URL || "https://hlmobile-api.hlgroupmobile.workers.dev";
+                      const templateUrl = mvnoData.form_template.startsWith("http")
+                        ? mvnoData.form_template
+                        : `${API}${mvnoData.form_template}`;
+                      try {
+                        const excludedPages = parseJsonSafe<number[]>(mvnoData?.excluded_pages, []);
+                        toast("PDF 생성 중...", "info");
+                        // 사용자 항목 (form_config 기반) + 합성 필드 처리
+                        const userValues: Record<string, string> = { ...formData };
+                        // 주소+상세주소 합성
+                        if (formData.address) userValues.address = `${formData.address} ${formData.addressDetail || ""}`.trim();
+                        // composite 필드 합성
+                        formFields.filter(f => f.type === "composite" && f.subFields).forEach(f => {
+                          userValues[f.key] = f.subFields!.map(s => formData[s.key] || "").filter(Boolean).join(f.separator || "/");
+                        });
+
+                        await fillAndOpenPdf(templateUrl, fieldPositions, {
+                          ...userValues,
+                          // 요금제 항목
+                          planName: selectedPlan?.name || "",
+                          planMonthly: selectedPlan?.monthly != null ? formatPrice(selectedPlan.monthly) : "",
+                          planBaseFee: selectedPlan?.base_fee != null ? formatPrice(selectedPlan.base_fee) : "",
+                          planDiscount: selectedPlan?.discount != null ? formatPrice(selectedPlan.discount) : "",
+                          planVoice: selectedPlan?.voice ?? "",
+                          planSms: selectedPlan?.sms ?? "",
+                          planData: selectedPlan?.data ?? "",
+                          planQos: selectedPlan?.qos ?? "",
+                          planType: paymentType === "postpaid" ? "후불" : "선불",
+                          carrierName: carrierName,
+                          // 커스텀 요금제 필드
+                          ...(selectedPlan?.extra_fields ? (() => { try { return JSON.parse(selectedPlan.extra_fields!) as Record<string, string>; } catch { return {}; } })() : {}),
+                        }, { excludedPages });
+                        toast("PDF가 새 탭에서 열렸습니다.", "success");
+                      } catch {
+                        toast("PDF 생성 실패. 기본 인쇄로 전환합니다.", "error");
+                        window.print();
                       }
                     } else {
                       window.print();
@@ -219,87 +299,6 @@ function FormContent() {
               </div>
             </div>
 
-            {/* 인쇄 전용 양식 */}
-            {(() => {
-              const mvnoData = tree.flatMap(m => m.children || []).find(c => c.id === selectedCarrier);
-              const templateUrl = mvnoData?.form_template;
-              const isPdf = templateUrl?.endsWith(".pdf");
-
-              // 좌표 데이터 파싱
-              let fieldPositions: { key: string; x: number; y: number; fontSize: number; page: number }[] = [];
-              if (mvnoData?.form_fields) {
-                try {
-                  const parsed = JSON.parse(mvnoData.form_fields);
-                  if (Array.isArray(parsed) && parsed.length > 0 && parsed[0]?.key) {
-                    fieldPositions = parsed;
-                  }
-                } catch {}
-              }
-
-              // 필드 key → 값 매핑
-              const valueMap: Record<string, string> = {
-                subscriberName: formData.subscriberName,
-                birthDate: formData.birthDate,
-                contactNumber: formData.contactNumber,
-                customerType: formData.customerType,
-                idNumber: formData.idNumber,
-                nationality: formData.nationality,
-                address: `${formData.address} ${formData.addressDetail}`,
-                addressDetail: formData.addressDetail,
-                activationType: formData.activationType,
-                usimSerial: formData.usimSerial,
-                desiredNumber: formData.desiredNumber,
-                storeName: formData.storeName,
-              };
-
-              return (
-                <div className={styles.printOnly}>
-                  {templateUrl && isPdf && fieldPositions.length > 0 ? (
-                    /* PDF 배경 + 좌표 오버레이 인쇄 */
-                    <div style={{ position: "relative", width: "100%", height: "100vh" }}>
-                      <iframe src={templateUrl} style={{ width: "100%", height: "100%", border: "none" }} />
-                      {fieldPositions.filter(fp => fp.page === 1).map(fp => (
-                        <div key={fp.key} style={{
-                          position: "absolute", left: `${fp.x}%`, top: `${fp.y}%`,
-                          fontSize: fp.fontSize || 12, fontWeight: 600, color: "#000",
-                          whiteSpace: "nowrap", transform: "translate(-50%, -50%)",
-                        }}>
-                          {valueMap[fp.key] || ""}
-                        </div>
-                      ))}
-                    </div>
-                  ) : (
-                    /* 기본 양식 */
-                    <>
-                      <div className={styles.printHeader}>
-                        <h1>이동통신 가입신청서</h1>
-                        <p>{carrierName} · {paymentType === "postpaid" ? "후불" : "선불"}</p>
-                      </div>
-                      <table className={styles.printTable}>
-                        <tbody>
-                          <tr><td className={styles.printLabel}>가입자명</td><td>{formData.subscriberName}</td><td className={styles.printLabel}>생년월일</td><td>{formData.birthDate}</td></tr>
-                          <tr><td className={styles.printLabel}>연락처</td><td>{formData.contactNumber}</td><td className={styles.printLabel}>고객유형</td><td>{formData.customerType}</td></tr>
-                          <tr><td className={styles.printLabel}>신분증번호</td><td>{formData.idNumber}</td><td className={styles.printLabel}>국적</td><td>{formData.nationality}</td></tr>
-                          <tr><td className={styles.printLabel}>주소</td><td colSpan={3}>{formData.address} {formData.addressDetail}</td></tr>
-                          <tr><td className={styles.printLabel}>통신사</td><td>{carrierName}</td><td className={styles.printLabel}>개통구분</td><td>{formData.activationType}</td></tr>
-                          <tr><td className={styles.printLabel}>요금제</td><td>{selectedPlan?.name}</td><td className={styles.printLabel}>월 요금</td><td>{selectedPlan ? formatPrice(selectedPlan.monthly) : ""}</td></tr>
-                          <tr><td className={styles.printLabel}>USIM 일련번호</td><td>{formData.usimSerial}</td><td className={styles.printLabel}>희망번호</td><td>{formData.desiredNumber}</td></tr>
-                          <tr><td className={styles.printLabel}>판매점명</td><td colSpan={3}>{formData.storeName}</td></tr>
-                        </tbody>
-                      </table>
-                      <div className={styles.printSignature}>
-                        <p>위 내용이 사실과 다름없음을 확인합니다.</p>
-                        <div className={styles.printSignRow}>
-                          <span>신청일: {new Date().toLocaleDateString("ko-KR")}</span>
-                          <span>신청인: {formData.subscriberName} (서명)</span>
-                        </div>
-                      </div>
-                      <div className={styles.printFooter}>hlmobile · 출처: hlmobile.pages.dev</div>
-                    </>
-                  )}
-                </div>
-              );
-            })()}
           </div>
         </div>
       </>
@@ -359,26 +358,45 @@ function FormContent() {
                 <h2 className={styles.formTitle}>{mnoName} 알뜰폰을 선택하세요</h2>
                 <p className={styles.formDesc}>{mnoName} 망을 사용하는 알뜰폰 통신사를 선택해주세요.</p>
                 <div className={styles.carrierGrid}>
-                  {mvnoList.map((c, i) => (
-                    <div
-                      key={c.id}
-                      className={`${styles.carrierCard} ${selectedCarrier === c.id ? styles.carrierCardActive : ""} fadeIn`}
-                      onClick={() => {
-                        setSelectedCarrier(c.id); setSelectedPlan(null); setAllPlans([]);
-                        const pt = c.payment_type || "both";
-                        setCarrierPaymentType(pt);
-                        setPaymentType(pt === "prepaid" ? "prepaid" : "postpaid");
-                      }}
-                      style={{ animationDelay: `${i * 0.05}s` }}
-                    >
-                      <div className={styles.carrierCardIcon} style={{ width: "100%", height: 48, display: "flex", alignItems: "center", justifyContent: "center", marginBottom: 8 }}>
-                        {c.icon.startsWith("http") || c.icon.startsWith("/") ? (
-                          <img src={c.icon} alt={c.title} style={{ maxWidth: "80%", maxHeight: 44, objectFit: "contain" }} />
-                        ) : <span style={{ fontSize: 32 }}>{c.icon}</span>}
+                  {mvnoList.map((c, i) => {
+                    const hasLink = c.forms?.startsWith("http");
+                    return hasLink ? (
+                      <a
+                        key={c.id}
+                        href={c.forms}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className={`${styles.carrierCard} fadeIn`}
+                        style={{ animationDelay: `${i * 0.05}s`, textDecoration: "none", color: "inherit" }}
+                      >
+                        <div className={styles.carrierCardIcon} style={{ width: "100%", height: 48, display: "flex", alignItems: "center", justifyContent: "center", marginBottom: 8 }}>
+                          {c.icon.startsWith("http") || c.icon.startsWith("/") ? (
+                            <img src={c.icon} alt={c.title} style={{ maxWidth: "80%", maxHeight: 44, objectFit: "contain" }} />
+                          ) : <span style={{ fontSize: 32 }}>{c.icon}</span>}
+                        </div>
+                        <div className={styles.carrierCardTitle}>{c.title}</div>
+                      </a>
+                    ) : (
+                      <div
+                        key={c.id}
+                        className={`${styles.carrierCard} ${selectedCarrier === c.id ? styles.carrierCardActive : ""} fadeIn`}
+                        onClick={() => {
+                          setSelectedCarrier(c.id); setSelectedPlan(null); setAllPlans([]);
+                          const pt = c.payment_type || "both";
+                          setCarrierPaymentType(pt);
+                          setPaymentType(pt === "prepaid" ? "prepaid" : "postpaid");
+                        }}
+                        style={{ animationDelay: `${i * 0.05}s` }}
+                      >
+                        <div className={styles.carrierCardIcon} style={{ width: "100%", height: 48, display: "flex", alignItems: "center", justifyContent: "center", marginBottom: 8 }}>
+                          {c.icon.startsWith("http") || c.icon.startsWith("/") ? (
+                            <img src={c.icon} alt={c.title} style={{ maxWidth: "80%", maxHeight: 44, objectFit: "contain" }} />
+                          ) : <span style={{ fontSize: 32 }}>{c.icon}</span>}
+                        </div>
+                        <div className={styles.carrierCardTitle}>{c.title}</div>
                       </div>
-                      <div className={styles.carrierCardTitle}>{c.title}</div>
-                    </div>
-                  ))}
+                    );
+                  })}
                 </div>
               </>
             )}
@@ -422,10 +440,10 @@ function FormContent() {
                       <table className={styles.planTable}>
                         <thead>
                           <tr>
-                            <th>요금제명 <span className={styles.sortIcon}>⇅</span></th>
-                            <th>월납부금액 <span className={styles.sortIcon}>⇅</span></th>
-                            <th>기본료 <span className={styles.sortIcon}>⇅</span></th>
-                            <th>프로모션할인 <span className={styles.sortIcon}>⇅</span></th>
+                            <th style={{ cursor: "pointer" }} onClick={() => toggleSort("name")}>요금제명 {sortKey === "name" ? (sortDir === "asc" ? "↑" : "↓") : "⇅"}</th>
+                            <th style={{ cursor: "pointer" }} onClick={() => toggleSort("monthly")}>월납부금액 {sortKey === "monthly" ? (sortDir === "asc" ? "↑" : "↓") : "⇅"}</th>
+                            <th style={{ cursor: "pointer" }} onClick={() => toggleSort("base_fee")}>기본료 {sortKey === "base_fee" ? (sortDir === "asc" ? "↑" : "↓") : "⇅"}</th>
+                            <th style={{ cursor: "pointer" }} onClick={() => toggleSort("discount")}>프로모션할인 {sortKey === "discount" ? (sortDir === "asc" ? "↑" : "↓") : "⇅"}</th>
                             <th>음성</th>
                             <th>문자</th>
                             <th>데이터</th>
@@ -486,112 +504,118 @@ function FormContent() {
               </>
             )}
 
-            {/* Step 4: 신청서 정보 입력 */}
+            {/* Step 4: 신청서 정보 입력 (form_config 기반 동적 렌더링) */}
             {step === 4 && (
               <>
                 <h2 className={styles.formTitle}>신청서 정보를 입력하세요</h2>
                 <p className={styles.formDesc}>신청서에 기재될 정보를 입력해주세요.</p>
 
-                <div className={styles.fieldRow}>
-                  <div className={styles.fieldGroup}>
-                    <label className={styles.fieldLabel}>USIM 일련번호</label>
-                    <input type="text" className={styles.input} placeholder="USIM 일련번호" value={formData.usimSerial} onChange={(e) => setFormData({ ...formData, usimSerial: e.target.value })} />
-                  </div>
-                  <div className={styles.fieldGroup}>
-                    <label className={styles.fieldLabel}>고객유형<span className={styles.fieldRequired}>*</span></label>
-                    <select className={styles.select} value={formData.customerType} onChange={(e) => setFormData({ ...formData, customerType: e.target.value })}>
-                      <option value="" disabled>선택하세요</option>
-                      <option value="개인">개인</option>
-                      <option value="외국인">외국인</option>
-                      <option value="청소년">청소년</option>
-                      <option value="개인사업자">개인사업자</option>
-                      <option value="법인사업자">법인사업자</option>
-                    </select>
-                  </div>
-                </div>
+                <div className={styles.fieldRow} style={{ flexWrap: "wrap" }}>
+                  {formFields.map(f => {
+                    // 조건부 표시
+                    if (f.showWhen && (formData[f.showWhen.field] || "") !== f.showWhen.value) return null;
 
-                <div className={styles.fieldRow}>
-                  <div className={styles.fieldGroup}>
-                    <label className={styles.fieldLabel}>가입자명<span className={styles.fieldRequired}>*</span></label>
-                    <input type="text" className={styles.input} placeholder="홍길동" value={formData.subscriberName} onChange={(e) => setFormData({ ...formData, subscriberName: e.target.value })} />
-                  </div>
-                  <div className={styles.fieldGroup}>
-                    <label className={styles.fieldLabel}>개통번호 연락번호<span className={styles.fieldRequired}>*</span></label>
-                    <input type="tel" className={styles.input} placeholder="010-0000-0000" value={formData.contactNumber} onChange={(e) => setFormData({ ...formData, contactNumber: formatPhone(e.target.value) })} />
-                  </div>
-                </div>
+                    const val = formData[f.key] || "";
+                    const set = (v: string) => setFormData(prev => ({ ...prev, [f.key]: v }));
 
-                <div className={styles.fieldRow}>
-                  <div className={styles.fieldGroup}>
-                    <label className={styles.fieldLabel}>생년월일<span className={styles.fieldRequired}>*</span></label>
-                    <input type="text" className={styles.input} placeholder="YYYYMMDD" value={formData.birthDate} onChange={(e) => setFormData({ ...formData, birthDate: formatBirth(e.target.value) })} />
-                  </div>
-                  <div className={styles.fieldGroup}>
-                    <label className={styles.fieldLabel}>신분증번호/여권번호</label>
-                    <input type="text" className={styles.input} placeholder="신분증 또는 여권 번호" value={formData.idNumber} onChange={(e) => setFormData({ ...formData, idNumber: e.target.value })} />
-                  </div>
-                </div>
+                    // 합성 필드
+                    if (f.type === "composite" && f.subFields) {
+                      return (
+                        <div key={f.key} className={styles.fieldGroup}>
+                          <label className={styles.fieldLabel}>{f.label}{f.required && <span className={styles.fieldRequired}>*</span>}</label>
+                          <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                            {f.subFields.map((sub, i) => (
+                              <span key={sub.key} style={{ display: "flex", alignItems: "center", gap: 6, flex: 1 }}>
+                                {i > 0 && <span style={{ color: "var(--text-3)", fontWeight: 700 }}>{f.separator || "/"}</span>}
+                                <input type="text" className={styles.input} placeholder={sub.label}
+                                  value={formData[sub.key] || ""}
+                                  onChange={e => setFormData(prev => ({ ...prev, [sub.key]: e.target.value }))}
+                                  style={{ flex: 1 }} />
+                              </span>
+                            ))}
+                          </div>
+                        </div>
+                      );
+                    }
 
-                <div className={styles.fieldRow}>
-                  <div className={styles.fieldGroup}>
-                    <label className={styles.fieldLabel}>국적</label>
-                    <input type="text" className={styles.input} placeholder="대한민국" value={formData.nationality} onChange={(e) => setFormData({ ...formData, nationality: e.target.value })} />
-                  </div>
-                  <div className={styles.fieldGroup}>
-                    <label className={styles.fieldLabel}>개통구분</label>
-                    <select className={styles.select} value={formData.activationType} onChange={(e) => setFormData({ ...formData, activationType: e.target.value })}>
-                      <option value="" disabled>선택하세요</option>
-                      <option value="신규가입">신규가입</option>
-                      <option value="번호이동">번호이동</option>
-                      <option value="기기변경">기기변경</option>
-                    </select>
-                  </div>
-                </div>
+                    // 셀렉트
+                    if (f.type === "select" && f.options) {
+                      return (
+                        <div key={f.key} className={styles.fieldGroup}>
+                          <label className={styles.fieldLabel}>{f.label}{f.required && <span className={styles.fieldRequired}>*</span>}</label>
+                          <select className={styles.select} value={val} onChange={e => set(e.target.value)}>
+                            <option value="">선택하세요</option>
+                            {f.options.map(o => <option key={o} value={o}>{o}</option>)}
+                          </select>
+                        </div>
+                      );
+                    }
 
-                <div className={styles.fieldGroup}>
-                  <label className={styles.fieldLabel}>주소</label>
-                  <div style={{ display: "flex", gap: 8 }}>
-                    <input type="text" className={styles.input} placeholder="주소 검색을 눌러주세요" value={formData.address} readOnly style={{ flex: 1, cursor: "pointer", background: "#F8FAFC" }} onClick={() => {
-                      if (typeof window !== "undefined") {
-                        const script = document.getElementById("daum-postcode");
-                        const run = () => {
-                          new (window as unknown as Record<string, unknown> & { daum: { Postcode: new (opts: Record<string, unknown>) => { open: () => void } } }).daum.Postcode({
-                            oncomplete: (data: { address: string; zonecode: string }) => {
-                              setFormData((prev) => ({ ...prev, address: `(${data.zonecode}) ${data.address}` }));
-                            },
-                          }).open();
-                        };
-                        if (script) { run(); } else {
-                          const s = document.createElement("script");
-                          s.id = "daum-postcode";
-                          s.src = "//t1.daumcdn.net/mapjsapi/bundle/postcode/prod/postcode.v2.js";
-                          s.onload = run;
-                          document.head.appendChild(s);
-                        }
-                      }
-                    }} />
-                    <button type="button" onClick={() => {
-                      const el = document.querySelector<HTMLInputElement>(`input[placeholder="주소 검색을 눌러주세요"]`);
-                      el?.click();
-                    }} style={{ padding: "0 20px", background: "var(--brand)", color: "white", borderRadius: 10, fontSize: 14, fontWeight: 600, cursor: "pointer", whiteSpace: "nowrap", flexShrink: 0 }}>
-                      주소 검색
-                    </button>
-                  </div>
-                </div>
-                <div className={styles.fieldGroup}>
-                  <label className={styles.fieldLabel}>상세주소</label>
-                  <input type="text" className={styles.input} placeholder="상세주소를 입력하세요" value={formData.addressDetail} onChange={(e) => setFormData({ ...formData, addressDetail: e.target.value })} />
-                </div>
+                    // 주소 (다음 우편번호 API)
+                    if (f.type === "address") {
+                      return (
+                        <div key={f.key} className={styles.fieldGroup} style={{ flex: "1 1 100%" }}>
+                          <label className={styles.fieldLabel}>{f.label}{f.required && <span className={styles.fieldRequired}>*</span>}</label>
+                          <div style={{ display: "flex", gap: 8 }}>
+                            <input type="text" className={styles.input} placeholder="주소 검색을 눌러주세요" value={val} readOnly
+                              style={{ flex: 1, cursor: "pointer", background: "#F8FAFC" }}
+                              onClick={() => {
+                                if (typeof window === "undefined") return;
+                                const script = document.getElementById("daum-postcode");
+                                const run = () => {
+                                  new (window as unknown as Record<string, unknown> & { daum: { Postcode: new (opts: Record<string, unknown>) => { open: () => void } } }).daum.Postcode({
+                                    oncomplete: (data: { address: string; zonecode: string }) => {
+                                      setFormData(prev => ({ ...prev, [f.key]: `(${data.zonecode}) ${data.address}` }));
+                                    },
+                                  }).open();
+                                };
+                                if (script) { run(); } else {
+                                  const s = document.createElement("script");
+                                  s.id = "daum-postcode";
+                                  s.src = "//t1.daumcdn.net/mapjsapi/bundle/postcode/prod/postcode.v2.js";
+                                  s.onload = run;
+                                  document.head.appendChild(s);
+                                }
+                              }} />
+                            <button type="button" onClick={() => {
+                              const el = document.querySelector<HTMLInputElement>(`input[placeholder="주소 검색을 눌러주세요"]`);
+                              el?.click();
+                            }} style={{ padding: "0 20px", background: "var(--brand)", color: "white", borderRadius: 10, fontSize: 14, fontWeight: 600, cursor: "pointer", whiteSpace: "nowrap", flexShrink: 0 }}>
+                              주소 검색
+                            </button>
+                          </div>
+                        </div>
+                      );
+                    }
 
-                <div className={styles.fieldRow}>
-                  <div className={styles.fieldGroup}>
-                    <label className={styles.fieldLabel}>희망번호</label>
-                    <input type="text" className={styles.input} placeholder="010-XXXX-XXXX" value={formData.desiredNumber} onChange={(e) => setFormData({ ...formData, desiredNumber: e.target.value })} />
-                  </div>
-                  <div className={styles.fieldGroup}>
-                    <label className={styles.fieldLabel}>판매점명</label>
-                    <input type="text" className={styles.input} placeholder="판매점명" value={formData.storeName} onChange={(e) => setFormData({ ...formData, storeName: e.target.value })} />
-                  </div>
+                    // 전화번호
+                    if (f.type === "phone") {
+                      return (
+                        <div key={f.key} className={styles.fieldGroup}>
+                          <label className={styles.fieldLabel}>{f.label}{f.required && <span className={styles.fieldRequired}>*</span>}</label>
+                          <input type="tel" className={styles.input} placeholder={f.placeholder || "010-0000-0000"} value={val} onChange={e => set(formatPhone(e.target.value))} />
+                        </div>
+                      );
+                    }
+
+                    // 날짜 (생년월일 등)
+                    if (f.type === "date") {
+                      return (
+                        <div key={f.key} className={styles.fieldGroup}>
+                          <label className={styles.fieldLabel}>{f.label}{f.required && <span className={styles.fieldRequired}>*</span>}</label>
+                          <input type="text" className={styles.input} placeholder={f.placeholder || "YYYYMMDD"} value={val} onChange={e => set(formatBirth(e.target.value))} />
+                        </div>
+                      );
+                    }
+
+                    // 기본 텍스트
+                    return (
+                      <div key={f.key} className={styles.fieldGroup}>
+                        <label className={styles.fieldLabel}>{f.label}{f.required && <span className={styles.fieldRequired}>*</span>}</label>
+                        <input type="text" className={styles.input} placeholder={f.placeholder || f.label} value={val} onChange={e => set(e.target.value)} />
+                      </div>
+                    );
+                  })}
                 </div>
               </>
             )}
@@ -604,19 +628,12 @@ function FormContent() {
                 <div className={styles.completeInfo}>
                   <div className={styles.completeInfoRow}><span className={styles.completeInfoLabel}>통신망</span><span className={styles.completeInfoValue}>{mnoName}</span></div>
                   <div className={styles.completeInfoRow}><span className={styles.completeInfoLabel}>통신사</span><span className={styles.completeInfoValue}>{carrierName}</span></div>
-                  <div className={styles.completeInfoRow}><span className={styles.completeInfoLabel}>개통구분</span><span className={styles.completeInfoValue}>{formData.activationType}</span></div>
                   <div className={styles.completeInfoRow}><span className={styles.completeInfoLabel}>결제 방식</span><span className={styles.completeInfoValue}>{paymentType === "postpaid" ? "후불" : "선불"}</span></div>
                   <div className={styles.completeInfoRow}><span className={styles.completeInfoLabel}>요금제</span><span className={styles.completeInfoValue}>{selectedPlan?.name}</span></div>
                   <div className={styles.completeInfoRow}><span className={styles.completeInfoLabel}>월 요금</span><span className={styles.completeInfoValue}>{selectedPlan ? formatPrice(selectedPlan.monthly) : ""}</span></div>
-                  <div className={styles.completeInfoRow}><span className={styles.completeInfoLabel}>가입자명</span><span className={styles.completeInfoValue}>{formData.subscriberName}</span></div>
-                  <div className={styles.completeInfoRow}><span className={styles.completeInfoLabel}>생년월일</span><span className={styles.completeInfoValue}>{formData.birthDate}</span></div>
-                  <div className={styles.completeInfoRow}><span className={styles.completeInfoLabel}>연락처</span><span className={styles.completeInfoValue}>{formData.contactNumber}</span></div>
-                  <div className={styles.completeInfoRow}><span className={styles.completeInfoLabel}>고객유형</span><span className={styles.completeInfoValue}>{formData.customerType}</span></div>
-                  <div className={styles.completeInfoRow}><span className={styles.completeInfoLabel}>개통구분</span><span className={styles.completeInfoValue}>{formData.activationType}</span></div>
-                  {formData.usimSerial && <div className={styles.completeInfoRow}><span className={styles.completeInfoLabel}>USIM</span><span className={styles.completeInfoValue}>{formData.usimSerial}</span></div>}
-                  {formData.address && <div className={styles.completeInfoRow}><span className={styles.completeInfoLabel}>주소</span><span className={styles.completeInfoValue}>{formData.address} {formData.addressDetail}</span></div>}
-                  {formData.desiredNumber && <div className={styles.completeInfoRow}><span className={styles.completeInfoLabel}>희망번호</span><span className={styles.completeInfoValue}>{formData.desiredNumber}</span></div>}
-                  {formData.storeName && <div className={styles.completeInfoRow}><span className={styles.completeInfoLabel}>판매점</span><span className={styles.completeInfoValue}>{formData.storeName}</span></div>}
+                  {formFields.filter(f => (formData[f.key] || "").trim()).map(f => (
+                    <div key={f.key} className={styles.completeInfoRow}><span className={styles.completeInfoLabel}>{f.label}</span><span className={styles.completeInfoValue}>{formData[f.key]}</span></div>
+                  ))}
                 </div>
               </>
             )}

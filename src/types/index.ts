@@ -12,6 +12,7 @@ export interface Carrier {
   form_version: string | null;
   form_template: string | null;
   form_fields: string | null;
+  excluded_pages: string | null;
   is_active: number;
   created_at: string;
   updated_at: string;
@@ -21,10 +22,13 @@ export interface Carrier {
 export interface FormFieldConfig {
   key: string;
   label: string;
-  type: "text" | "phone" | "date" | "select" | "address";
+  type: "text" | "phone" | "date" | "select" | "address" | "composite";
   required: boolean;
   options?: string[];
   placeholder?: string;
+  subFields?: { key: string; label: string }[];
+  separator?: string;
+  showWhen?: { field: string; value: string };
 }
 
 export interface Notice {
@@ -33,6 +37,7 @@ export interface Notice {
   content: string;
   is_pinned: number;
   is_active: number;
+  attachments: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -62,6 +67,7 @@ export interface Plan {
   data: string;
   qos: string;
   type: "postpaid" | "prepaid";
+  extra_fields: string | null;
   is_active: number;
   sort_order: number;
   created_at: string;
@@ -87,6 +93,7 @@ export interface Application {
   desired_number: string;
   store_name: string;
   payment_type: string;
+  extra_data: string | null;
   created_at: string;
 }
 

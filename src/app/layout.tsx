@@ -13,7 +13,7 @@ const geistMono = Geist_Mono({
   subsets: ["latin"],
 });
 
-const SITE_URL = "https://hlmobile.pages.dev";
+const SITE_URL = "https://hlmobile-1ue.pages.dev";
 const SITE_NAME = "hlmobile";
 const SITE_DESCRIPTION =
   "hlmobile — 모든 통신사 가입신청서를 무료로 작성하고 출력하세요. SKT, KT, LG U+, 알뜰폰 신규가입·번호이동·기기변경·해지 양식을 한 곳에서.";

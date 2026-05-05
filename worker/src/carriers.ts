@@ -5,7 +5,8 @@ export async function handleCarriers(
   env: Env,
   path: string
 ): Promise<Response> {
-  const id = path.replace("/api/carriers", "").replace(/^\//, "") || null;
+  const rawId = path.replace("/api/carriers", "").replace(/^\//, "") || null;
+  const id = rawId ? decodeURIComponent(rawId) : null;
 
   if (request.method === "GET") {
     return id ? getCarrier(env, id) : listCarriers(env, request);
@@ -71,7 +72,12 @@ async function getCarrier(env: Env, id: string): Promise<Response> {
 }
 
 async function createCarrier(env: Env, request: Request): Promise<Response> {
-  const body = await request.json<Record<string, unknown>>();
+  let body: Record<string, unknown>;
+  try {
+    body = await request.json();
+  } catch {
+    return json({ ok: false, error: "잘못된 요청 형식입니다" }, 400);
+  }
   const { id, icon, iconStyle, title, description, forms, sortOrder, parentId, paymentType } = body as {
     id: string; icon: string; iconStyle: string; title: string;
     description: string; forms: string; sortOrder: number; parentId: string | null; paymentType: string;
@@ -88,7 +94,15 @@ async function createCarrier(env: Env, request: Request): Promise<Response> {
 }
 
 async function updateCarrier(env: Env, id: string, request: Request): Promise<Response> {
-  const body = await request.json<Record<string, unknown>>();
+  const exists = await env.DB.prepare("SELECT id FROM carriers WHERE id = ?").bind(id).first();
+  if (!exists) return json({ ok: false, error: "통신사를 찾을 수 없습니다" }, 404);
+
+  let body: Record<string, unknown>;
+  try {
+    body = await request.json();
+  } catch {
+    return json({ ok: false, error: "잘못된 요청 형식입니다" }, 400);
+  }
   const fields: string[] = [];
   const values: unknown[] = [];
 
@@ -98,8 +112,8 @@ async function updateCarrier(env: Env, id: string, request: Request): Promise<Re
     isActive: "is_active", parentId: "parent_id", paymentType: "payment_type",
     icon_style: "icon_style", sort_order: "sort_order",
     is_active: "is_active", parent_id: "parent_id", payment_type: "payment_type",
-    form_config: "form_config", form_version: "form_version", form_template: "form_template", form_fields: "form_fields",
-    formConfig: "form_config", formVersion: "form_version", formTemplate: "form_template", formFields: "form_fields",
+    form_config: "form_config", form_version: "form_version", form_template: "form_template", form_fields: "form_fields", excluded_pages: "excluded_pages",
+    formConfig: "form_config", formVersion: "form_version", formTemplate: "form_template", formFields: "form_fields", excludedPages: "excluded_pages",
   };
 
   for (const [key, val] of Object.entries(body)) {
@@ -119,18 +133,21 @@ async function updateCarrier(env: Env, id: string, request: Request): Promise<Re
 const DEFAULT_MNOS = ["skt", "kt", "lgu"];
 
 async function deleteCarrier(env: Env, id: string): Promise<Response> {
+  const exists = await env.DB.prepare("SELECT id FROM carriers WHERE id = ?").bind(id).first();
+  if (!exists) return json({ ok: false, error: "통신사를 찾을 수 없습니다" }, 404);
+
   // 대분류(MNO)는 삭제 불가
   if (DEFAULT_MNOS.includes(id)) {
     return json({ ok: false, error: "대분류 통신사는 삭제할 수 없습니다" }, 400);
   }
 
-  // 알뜰폰 삭제 시 소속 요금제도 삭제
-  const children = await env.DB.prepare("SELECT id FROM carriers WHERE parent_id = ?").bind(id).all();
-  for (const child of children.results as { id: string }[]) {
-    await env.DB.prepare("DELETE FROM plans WHERE carrier_id = ?").bind(child.id).run();
+  // 하위 통신사 + 요금제 일괄 삭제
+  const childIds = await env.DB.prepare("SELECT id FROM carriers WHERE parent_id = ?").bind(id).all();
+  const idsToDelete = [id, ...(childIds.results as { id: string }[]).map(c => c.id)];
+  for (const cid of idsToDelete) {
+    await env.DB.prepare("DELETE FROM plans WHERE carrier_id = ?").bind(cid).run();
   }
   await env.DB.prepare("DELETE FROM carriers WHERE parent_id = ?").bind(id).run();
-  await env.DB.prepare("DELETE FROM plans WHERE carrier_id = ?").bind(id).run();
   await env.DB.prepare("DELETE FROM carriers WHERE id = ?").bind(id).run();
   return json({ ok: true });
 }

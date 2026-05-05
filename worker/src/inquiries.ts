@@ -43,9 +43,13 @@ async function getInquiry(env: Env, id: string): Promise<Response> {
 }
 
 async function createInquiry(env: Env, request: Request): Promise<Response> {
-  const { name, phone, email, title, content } = await request.json<{
-    name: string; phone: string; email: string; title: string; content: string;
-  }>();
+  let parsed: { name: string; phone: string; email: string; title: string; content: string };
+  try {
+    parsed = await request.json();
+  } catch {
+    return json({ ok: false, error: "잘못된 요청 형식입니다" }, 400);
+  }
+  const { name, phone, email, title, content } = parsed;
   if (!name || !title || !content) return json({ ok: false, error: "이름, 제목, 내용은 필수입니다" }, 400);
 
   const result = await env.DB.prepare(
@@ -56,8 +60,17 @@ async function createInquiry(env: Env, request: Request): Promise<Response> {
 }
 
 async function replyInquiry(env: Env, id: string, request: Request): Promise<Response> {
-  const { reply } = await request.json<{ reply: string }>();
+  let body: { reply: string };
+  try {
+    body = await request.json();
+  } catch {
+    return json({ ok: false, error: "잘못된 요청 형식입니다" }, 400);
+  }
+  const { reply } = body;
   if (!reply) return json({ ok: false, error: "답변 내용은 필수입니다" }, 400);
+
+  const exists = await env.DB.prepare("SELECT id FROM inquiries WHERE id = ?").bind(id).first();
+  if (!exists) return json({ ok: false, error: "문의를 찾을 수 없습니다" }, 404);
 
   await env.DB.prepare(
     "UPDATE inquiries SET reply = ?, replied_at = datetime('now') WHERE id = ?"
@@ -67,12 +80,20 @@ async function replyInquiry(env: Env, id: string, request: Request): Promise<Res
 }
 
 async function deleteInquiry(env: Env, id: string): Promise<Response> {
+  const exists = await env.DB.prepare("SELECT id FROM inquiries WHERE id = ?").bind(id).first();
+  if (!exists) return json({ ok: false, error: "문의를 찾을 수 없습니다" }, 404);
   await env.DB.prepare("DELETE FROM inquiries WHERE id = ?").bind(id).run();
   return json({ ok: true });
 }
 
 async function searchMyInquiries(env: Env, request: Request): Promise<Response> {
-  const { name, email } = await request.json<{ name: string; email: string }>();
+  let parsed: { name: string; email: string };
+  try {
+    parsed = await request.json();
+  } catch {
+    return json({ ok: false, error: "잘못된 요청 형식입니다" }, 400);
+  }
+  const { name, email } = parsed;
   if (!name || !email) return json({ ok: false, error: "이름과 이메일을 입력해주세요" }, 400);
 
   const result = await env.DB.prepare(

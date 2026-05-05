@@ -14,9 +14,10 @@ export async function handleUpload(request: Request, env: Env): Promise<Response
   const allowed = ["png", "jpg", "jpeg", "gif", "webp", "svg", "pdf"];
   if (!allowed.includes(ext)) return json({ ok: false, error: "지원하지 않는 파일 형식입니다" }, 400);
 
-  // PDF는 20MB 제한
-  if (ext === "pdf" && file.size > 20 * 1024 * 1024) {
-    return json({ ok: false, error: "PDF 파일은 20MB 이하만 가능합니다" }, 400);
+  // 파일 크기 제한: PDF 20MB, 이미지 5MB
+  const maxSize = ext === "pdf" ? 20 * 1024 * 1024 : 5 * 1024 * 1024;
+  if (file.size > maxSize) {
+    return json({ ok: false, error: ext === "pdf" ? "PDF 파일은 20MB 이하만 가능합니다" : "이미지 파일은 5MB 이하만 가능합니다" }, 400);
   }
 
   const folder = ext === "pdf" ? "forms" : "icons";
@@ -25,12 +26,18 @@ export async function handleUpload(request: Request, env: Env): Promise<Response
     httpMetadata: { contentType: file.type },
   });
 
-  const url = `https://hlmobile-api.blueehdwp.workers.dev/r2/${key}`;
+  const url = `https://hlmobile-api.hlgroupmobile.workers.dev/r2/${key}`;
   return json({ ok: true, data: { url, key } }, 201);
 }
 
 export async function handleR2Get(request: Request, env: Env, path: string): Promise<Response> {
+  if (request.method !== "GET") return json({ ok: false, error: "Method not allowed" }, 405);
+
   const key = path.replace("/r2/", "");
+  // 경로 순회 방지
+  if (!key || key.includes("..") || key.startsWith("/")) {
+    return json({ ok: false, error: "잘못된 경로입니다" }, 400);
+  }
   const obj = await env.R2.get(key);
   if (!obj) return new Response("Not found", { status: 404 });
 

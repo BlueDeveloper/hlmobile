@@ -48,11 +48,16 @@ async function getPlan(env: Env, id: string): Promise<Response> {
 }
 
 async function createPlan(env: Env, request: Request): Promise<Response> {
-  const body = await request.json<Record<string, unknown>>();
-  const { carrierId, name, monthly, baseFee, discount, voice, sms, data, qos, type, sortOrder } = body as {
+  let body: Record<string, unknown>;
+  try {
+    body = await request.json();
+  } catch {
+    return json({ ok: false, error: "잘못된 요청 형식입니다" }, 400);
+  }
+  const { carrierId, name, monthly, baseFee, discount, voice, sms, data, qos, type, sortOrder, extraFields } = body as {
     carrierId: string; name: string; monthly: number; baseFee: number;
     discount: number; voice: string; sms: string; data: string;
-    qos: string; type: string; sortOrder: number;
+    qos: string; type: string; sortOrder: number; extraFields?: Record<string, string>;
   };
 
   if (!carrierId || !name || monthly === undefined) {
@@ -60,18 +65,27 @@ async function createPlan(env: Env, request: Request): Promise<Response> {
   }
 
   const result = await env.DB.prepare(
-    `INSERT INTO plans (carrier_id, name, monthly, base_fee, discount, voice, sms, data, qos, type, sort_order)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    `INSERT INTO plans (carrier_id, name, monthly, base_fee, discount, voice, sms, data, qos, type, sort_order, extra_fields)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   ).bind(
     carrierId, name, monthly, baseFee || monthly, discount || 0,
-    voice || "", sms || "", data || "", qos || "-", type || "postpaid", sortOrder || 0
+    voice || "", sms || "", data || "", qos || "-", type || "postpaid", sortOrder || 0,
+    extraFields ? JSON.stringify(extraFields) : null
   ).run();
 
   return json({ ok: true, data: { id: result.meta.last_row_id } }, 201);
 }
 
 async function updatePlan(env: Env, id: string, request: Request): Promise<Response> {
-  const body = await request.json<Record<string, unknown>>();
+  const exists = await env.DB.prepare("SELECT id FROM plans WHERE id = ?").bind(id).first();
+  if (!exists) return json({ ok: false, error: "요금제를 찾을 수 없습니다" }, 404);
+
+  let body: Record<string, unknown>;
+  try {
+    body = await request.json();
+  } catch {
+    return json({ ok: false, error: "잘못된 요청 형식입니다" }, 400);
+  }
   const fieldMap: Record<string, string> = {
     carrierId: "carrier_id", name: "name", monthly: "monthly", baseFee: "base_fee",
     discount: "discount", voice: "voice", sms: "sms", data: "data", qos: "qos",
@@ -82,8 +96,13 @@ async function updatePlan(env: Env, id: string, request: Request): Promise<Respo
   const values: unknown[] = [];
 
   for (const [key, val] of Object.entries(body)) {
-    const col = fieldMap[key];
-    if (col) { fields.push(`${col} = ?`); values.push(val); }
+    if (key === "extraFields") {
+      fields.push("extra_fields = ?");
+      values.push(val ? JSON.stringify(val) : null);
+    } else {
+      const col = fieldMap[key];
+      if (col) { fields.push(`${col} = ?`); values.push(val); }
+    }
   }
 
   if (fields.length === 0) return json({ ok: false, error: "수정할 필드가 없습니다" }, 400);
@@ -96,6 +115,8 @@ async function updatePlan(env: Env, id: string, request: Request): Promise<Respo
 }
 
 async function deletePlan(env: Env, id: string): Promise<Response> {
+  const exists = await env.DB.prepare("SELECT id FROM plans WHERE id = ?").bind(id).first();
+  if (!exists) return json({ ok: false, error: "요금제를 찾을 수 없습니다" }, 404);
   await env.DB.prepare("DELETE FROM plans WHERE id = ?").bind(id).run();
   return json({ ok: true });
 }

@@ -70,7 +70,12 @@ export async function handleCrawl(request: Request, env: Env): Promise<Response>
 
   if (request.method !== "POST") return json({ ok: false, error: "POST only" }, 405);
 
-  const body = await request.json<{ carrierId: string }>();
+  let body: { carrierId: string };
+  try {
+    body = await request.json();
+  } catch {
+    return json({ ok: false, error: "잘못된 요청 형식입니다" }, 400);
+  }
   const { carrierId } = body;
 
   if (!carrierId) return json({ ok: false, error: "carrierId는 필수입니다" }, 400);
@@ -84,13 +89,13 @@ export async function handleCrawl(request: Request, env: Env): Promise<Response>
     // 알뜰폰 허브 목록 페이지 (공개 페이지)
     const res = await fetch("https://www.mvnohub.kr/product/products.do", {
       headers: {
-        "User-Agent": "Mozilla/5.0 (compatible; hlmobile-admin/1.0; +https://hlmobile.pages.dev)",
+        "User-Agent": "Mozilla/5.0 (compatible; hlmobile-admin/1.0; +https://hlmobile-1ue.pages.dev)",
         "Accept": "text/html",
       },
     });
 
     if (!res.ok) {
-      return json({ ok: false, error: `페이지 로드 실패: HTTP ${res.status}` });
+      return json({ ok: false, error: `페이지 로드 실패: HTTP ${res.status}` }, 502);
     }
 
     const html = await res.text();
@@ -178,7 +183,7 @@ export async function handleCrawl(request: Request, env: Env): Promise<Response>
       }
     }
   } catch (err) {
-    return json({ ok: false, error: err instanceof Error ? err.message : "크롤링 실패" });
+    return json({ ok: false, error: err instanceof Error ? err.message : "크롤링 실패" }, 500);
   }
 
   return json({

@@ -1,4 +1,4 @@
 User-agent: *
 Allow: /
 
-Sitemap: https://hlmobile.pages.dev/sitemap.xml
+Sitemap: https://hlmobile-1ue.pages.dev/sitemap.xml

@@ -73,21 +73,21 @@ export function ToastProvider({ children }: { children: ReactNode }) {
 
       {/* 토스트 */}
       <div style={{
-        position: "fixed", top: "50%", left: "50%", transform: "translate(-50%, -50%)",
-        zIndex: 100000, display: "flex", flexDirection: "column", gap: 10, alignItems: "center",
+        position: "fixed", bottom: 24, right: 24,
+        zIndex: 100000, display: "flex", flexDirection: "column", gap: 10, alignItems: "flex-end",
         pointerEvents: "none",
       }}>
         {toasts.map((t) => {
           const c = colors[t.type];
           return (
             <div key={t.id} style={{
-              padding: "14px 28px", background: c.bg, border: `1px solid ${c.border}`,
-              borderRadius: 14, fontSize: 15, fontWeight: 600, color: c.text,
-              boxShadow: "0 8px 30px rgba(0,0,0,0.12)", display: "flex", alignItems: "center", gap: 10,
+              padding: "8px 16px", background: c.bg, border: `1px solid ${c.border}`,
+              borderRadius: 8, fontSize: 12, fontWeight: 600, color: c.text,
+              boxShadow: "0 4px 16px rgba(0,0,0,0.1)", display: "flex", alignItems: "center", gap: 6,
               animation: "fadeIn 0.2s ease-out",
               pointerEvents: "auto",
             }}>
-              <span style={{ fontSize: 18, fontWeight: 800 }}>{c.icon}</span>
+              <span style={{ fontSize: 13, fontWeight: 800 }}>{c.icon}</span>
               {t.message}
             </div>
           );

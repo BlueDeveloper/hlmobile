@@ -1,25 +1,26 @@
 import { PDFDocument, StandardFonts, rgb } from "pdf-lib";
-import { Env, json, requireAuth } from "./auth";
+import { Env, json } from "./auth";
 
-// 한글 폰트가 없으므로 Helvetica로 대체 (한글은 깨짐 주의)
-// TODO: 한글 폰트 임베딩 필요 시 fontkit 사용
+// copyPages 방식: 원본 PDF 페이지를 새 문서에 복사 후 텍스트 오버레이
+// 이 방식은 원본 페이지의 content stream과 리소스를 그대로 보존
 
 export async function handlePdfFill(request: Request, env: Env): Promise<Response> {
   if (request.method !== "POST") return json({ ok: false, error: "POST only" }, 405);
 
-  const body = await request.json<{
-    carrierId: string;
-    values: Record<string, string>;
-  }>();
+  let body: { carrierId: string; values: Record<string, string> };
+  try {
+    body = await request.json();
+  } catch {
+    return json({ ok: false, error: "잘못된 요청 형식입니다" }, 400);
+  }
 
   const { carrierId, values } = body;
   if (!carrierId) return json({ ok: false, error: "carrierId 필수" }, 400);
+  if (!values || typeof values !== "object") return json({ ok: false, error: "values 필수" }, 400);
 
-  // 통신사 정보 가져오기
-  const carrier = await env.DB.prepare("SELECT form_template, form_fields FROM carriers WHERE id = ?").bind(carrierId).first<{ form_template: string; form_fields: string }>();
+  const carrier = await env.DB.prepare("SELECT form_template, form_fields, excluded_pages FROM carriers WHERE id = ?").bind(carrierId).first<{ form_template: string; form_fields: string; excluded_pages: string | null }>();
   if (!carrier?.form_template) return json({ ok: false, error: "양식이 등록되지 않았습니다" }, 404);
 
-  // 좌표 데이터 파싱
   let positions: { key: string; xPt?: number; yPt?: number; x?: number; y?: number; fontSize: number; page: number }[] = [];
   try {
     const parsed = JSON.parse(carrier.form_fields);
@@ -30,43 +31,63 @@ export async function handlePdfFill(request: Request, env: Env): Promise<Respons
 
   if (positions.length === 0) return json({ ok: false, error: "좌표 데이터가 없습니다" }, 400);
 
-  // PDF를 R2에서 직접 가져오기
+  // 제외 페이지 파싱
+  let excludedPages: number[] = [];
+  try { if (carrier.excluded_pages) excludedPages = JSON.parse(carrier.excluded_pages); } catch {}
+
   const pdfKey = carrier.form_template.replace(/^https?:\/\/[^/]+\/r2\//, "");
   const pdfObj = await env.R2.get(pdfKey);
   if (!pdfObj) return json({ ok: false, error: "PDF 파일을 찾을 수 없습니다" }, 404);
   const pdfBytes = await pdfObj.arrayBuffer();
 
-  // PDF 수정
-  const pdfDoc = await PDFDocument.load(pdfBytes);
+  // 원본 PDF 로드
+  const srcDoc = await PDFDocument.load(pdfBytes, {
+    ignoreEncryption: true,
+    updateMetadata: false,
+  });
+
+  // 새 PDF 생성 + copyPages로 원본 페이지 복사 (구조 보존)
+  const pdfDoc = await PDFDocument.create();
   const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
-  const pages = pdfDoc.getPages();
 
-  for (const pos of positions) {
-    const pageIdx = (pos.page || 1) - 1;
-    if (pageIdx < 0 || pageIdx >= pages.length) continue;
+  // 제외 페이지를 뺀 인덱스만 복사
+  const allIndices = srcDoc.getPageIndices();
+  const includedIndices = allIndices.filter(i => !excludedPages.includes(i + 1));
+  const copiedPages = await pdfDoc.copyPages(srcDoc, includedIndices);
 
-    const page = pages[pageIdx];
+  for (let ci = 0; ci < copiedPages.length; ci++) {
+    const originalPageNum = includedIndices[ci] + 1; // 1-based
+    const page = pdfDoc.addPage(copiedPages[ci]);
     const { width, height } = page.getSize();
-    const value = values[pos.key] || "";
-    if (!value) continue;
 
-    // xPt/yPt가 있으면 PDF pt 좌표 직접 사용, 없으면 % 변환
-    let x: number, y: number;
-    if (pos.xPt !== undefined && pos.yPt !== undefined) {
-      x = pos.xPt;
-      y = pos.yPt;
-    } else {
-      x = ((pos.x || 0) / 100) * width;
-      y = height - ((pos.y || 0) / 100) * height;
+    // 이 페이지의 좌표에 텍스트 그리기
+    for (const pos of positions) {
+      if ((pos.page || 1) !== originalPageNum) continue;
+
+      const value = values[pos.key] || "";
+      if (!value) continue;
+
+      let x: number, y: number;
+      if (pos.xPt !== undefined && pos.yPt !== undefined) {
+        x = pos.xPt;
+        y = pos.yPt;
+      } else {
+        x = ((pos.x || 0) / 100) * width;
+        y = height - ((pos.y || 0) / 100) * height;
+      }
+
+      try {
+        page.drawText(value, {
+          x,
+          y,
+          size: pos.fontSize || 10,
+          font,
+          color: rgb(0, 0, 0),
+        });
+      } catch {
+        // Helvetica는 한글 인코딩 불가 — 무시하고 계속
+      }
     }
-
-    page.drawText(value, {
-      x,
-      y,
-      size: pos.fontSize || 10,
-      font,
-      color: rgb(0, 0, 0),
-    });
   }
 
   const filledBytes = await pdfDoc.save();
