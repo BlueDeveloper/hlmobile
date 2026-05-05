@@ -1,7 +1,7 @@
 import type { Carrier, Plan, Notice, Inquiry, Application, ApiResponse } from "@/types";
 
 const API_BASE =
-  process.env.NEXT_PUBLIC_API_URL || "https://hlmobile-api.blueehdwp.workers.dev";
+  process.env.NEXT_PUBLIC_API_URL || "https://hlmobile-api.hlgroupmobile.workers.dev";
 
 // 간단 메모리 캐시 (GET 요청 30초 TTL)
 const cache = new Map<string, { data: unknown; ts: number }>();
