@@ -58,6 +58,13 @@ export async function login(password: string): Promise<ApiResponse<{ token: stri
   });
 }
 
+export async function changePassword(currentPassword: string, newPassword: string): Promise<ApiResponse<void>> {
+  return request("/api/auth/change-password", {
+    method: "POST",
+    body: JSON.stringify({ currentPassword, newPassword }),
+  });
+}
+
 // Carriers
 export async function fetchCarriers(activeOnly = true, parent?: string | null): Promise<Carrier[]> {
   const params = new URLSearchParams();
@@ -230,6 +237,39 @@ export async function deleteAllFormVersions(carrierId: string): Promise<ApiRespo
 export async function fetchDashboard(): Promise<Record<string, unknown>> {
   const res = await request<Record<string, unknown>>("/api/admin/dashboard");
   return res.data || {};
+}
+
+// Resources
+export interface Resource {
+  id: number;
+  carrier_id: string;
+  title: string;
+  category: string;
+  file_url: string;
+  file_name: string;
+  sort_order: number;
+  is_active: number;
+  carrier_name?: string;
+  carrier_icon?: string;
+  created_at: string;
+}
+
+export async function fetchResources(carrierId?: string): Promise<Resource[]> {
+  const params = carrierId ? `?carrier=${carrierId}` : "";
+  const res = await request<Resource[]>(`/api/resources${params}`);
+  return res.data || [];
+}
+
+export async function createResource(data: { carrierId: string; title: string; category: string; fileUrl: string; fileName: string }): Promise<ApiResponse<{ id: number }>> {
+  return request("/api/resources", { method: "POST", body: JSON.stringify(data) });
+}
+
+export async function updateResource(id: number, data: Record<string, unknown>): Promise<ApiResponse<void>> {
+  return request(`/api/resources/${id}`, { method: "PUT", body: JSON.stringify(data) });
+}
+
+export async function deleteResource(id: number): Promise<ApiResponse<void>> {
+  return request(`/api/resources/${id}`, { method: "DELETE" });
 }
 
 // Applications

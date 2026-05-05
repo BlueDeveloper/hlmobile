@@ -3,7 +3,7 @@
 import { useState, useEffect, useCallback } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { fetchSettings, updateSettings, uploadImage } from "@/lib/api";
+import { fetchSettings, updateSettings, uploadImage, changePassword } from "@/lib/api";
 import styles from "../page.module.css";
 
 interface SettingField {
@@ -35,6 +35,9 @@ export default function SiteSettingsPage() {
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [uploading, setUploading] = useState(false);
+  const [pwForm, setPwForm] = useState({ current: "", new: "", confirm: "" });
+  const [pwSaving, setPwSaving] = useState(false);
+  const [pwMsg, setPwMsg] = useState<{ type: "success" | "error"; text: string } | null>(null);
   const router = useRouter();
 
   const load = useCallback(async () => {
@@ -78,6 +81,23 @@ export default function SiteSettingsPage() {
     setUploading(false);
   };
 
+  const handleChangePassword = async () => {
+    setPwMsg(null);
+    if (!pwForm.current) { setPwMsg({ type: "error", text: "현재 비밀번호를 입력해주세요" }); return; }
+    if (!pwForm.new) { setPwMsg({ type: "error", text: "새 비밀번호를 입력해주세요" }); return; }
+    if (pwForm.new.length < 4) { setPwMsg({ type: "error", text: "비밀번호는 4자 이상이어야 합니다" }); return; }
+    if (pwForm.new !== pwForm.confirm) { setPwMsg({ type: "error", text: "새 비밀번호가 일치하지 않습니다" }); return; }
+    setPwSaving(true);
+    const res = await changePassword(pwForm.current, pwForm.new);
+    setPwSaving(false);
+    if (res.ok) {
+      setPwMsg({ type: "success", text: "비밀번호가 변경되었습니다" });
+      setPwForm({ current: "", new: "", confirm: "" });
+    } else {
+      setPwMsg({ type: "error", text: res.error || "변경에 실패했습니다" });
+    }
+  };
+
   const hasChanges = Object.keys(settings).some((k) => settings[k] !== original[k]);
 
   const handleLogout = () => { sessionStorage.removeItem("admin_token"); router.push("/admin"); };
@@ -95,6 +115,7 @@ export default function SiteSettingsPage() {
           <Link href="/admin/applications" className={styles.sidebarLink}>📋 신청서</Link>
           <Link href="/admin/form-settings" className={styles.sidebarLink}>📝 신청서설정</Link>
           <Link href="/admin/notices" className={styles.sidebarLink}>📢 공지사항</Link>
+          <Link href="/admin/resources" className={styles.sidebarLink}>📁 자료실</Link>
           <Link href="/admin/inquiries" className={styles.sidebarLink}>💬 문의</Link>
           <Link href="/admin/site-settings" className={`${styles.sidebarLink} ${styles.sidebarLinkActive}`}>⚙️ 사이트설정</Link>
         </nav>
@@ -125,6 +146,7 @@ export default function SiteSettingsPage() {
         {loading ? (
           <div className={styles.empty}>불러오는 중...</div>
         ) : (
+          <>
           <div style={{ display: "flex", flexDirection: "column", gap: 0, background: "white", borderRadius: 16, boxShadow: "0 1px 4px rgba(0,0,0,0.04), 0 0 0 1px rgba(0,0,0,0.04)", overflow: "hidden" }}>
             {/* 로고 미리보기 */}
             <div style={{ padding: "24px 28px", borderBottom: "1px solid #F1F5F9", background: "#F8FAFC" }}>
@@ -190,6 +212,34 @@ export default function SiteSettingsPage() {
               </div>
             ))}
           </div>
+
+          {/* 비밀번호 변경 */}
+          <div style={{ marginTop: 24, background: "white", borderRadius: 16, boxShadow: "0 1px 4px rgba(0,0,0,0.04), 0 0 0 1px rgba(0,0,0,0.04)", overflow: "hidden" }}>
+            <div style={{ padding: "20px 28px", borderBottom: "1px solid #F1F5F9", background: "#F8FAFC" }}>
+              <div style={{ fontSize: 16, fontWeight: 800, color: "var(--text-0)" }}>비밀번호 변경</div>
+            </div>
+            <div style={{ padding: "20px 28px", display: "flex", flexDirection: "column", gap: 14 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 20 }}>
+                <div style={{ flex: "0 0 180px", fontSize: 14, fontWeight: 700, color: "var(--text-0)" }}>현재 비밀번호</div>
+                <input type="password" className={styles.formInput} value={pwForm.current} onChange={(e) => setPwForm(p => ({ ...p, current: e.target.value }))} style={{ margin: 0 }} />
+              </div>
+              <div style={{ display: "flex", alignItems: "center", gap: 20 }}>
+                <div style={{ flex: "0 0 180px", fontSize: 14, fontWeight: 700, color: "var(--text-0)" }}>새 비밀번호</div>
+                <input type="password" className={styles.formInput} value={pwForm.new} onChange={(e) => setPwForm(p => ({ ...p, new: e.target.value }))} style={{ margin: 0 }} />
+              </div>
+              <div style={{ display: "flex", alignItems: "center", gap: 20 }}>
+                <div style={{ flex: "0 0 180px", fontSize: 14, fontWeight: 700, color: "var(--text-0)" }}>비밀번호 확인</div>
+                <input type="password" className={styles.formInput} value={pwForm.confirm} onChange={(e) => setPwForm(p => ({ ...p, confirm: e.target.value }))} style={{ margin: 0 }} />
+              </div>
+              <div style={{ display: "flex", alignItems: "center", gap: 12, marginTop: 4 }}>
+                <button onClick={handleChangePassword} disabled={pwSaving} style={{ padding: "10px 24px", background: "var(--brand)", color: "white", borderRadius: 10, fontSize: 14, fontWeight: 700, cursor: "pointer" }}>
+                  {pwSaving ? "변경 중..." : "비밀번호 변경"}
+                </button>
+                {pwMsg && <span style={{ fontSize: 13, fontWeight: 600, color: pwMsg.type === "success" ? "#059669" : "#DC2626" }}>{pwMsg.text}</span>}
+              </div>
+            </div>
+          </div>
+          </>
         )}
       </main>
     </div>

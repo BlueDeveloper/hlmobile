@@ -33,6 +33,7 @@ export default function Header({ logoIcon, logoText, logoAccent, logoImage }: He
         </Link>
         <nav className={styles.nav}>
           <Link href="/#carriers" className={styles.navLink}>통신사</Link>
+          <Link href="/resources" className={styles.navLink}>자료실</Link>
           <Link href="/notices" className={styles.navLink}>공지사항</Link>
           <Link href="/inquiry" className={styles.navLink}>문의</Link>
           <Link href="/form" className={styles.ctaButton}>신청서 작성하기</Link>

@@ -67,6 +67,7 @@ export default function AdminInquiriesPage() {
           <Link href="/admin/applications" className={styles.sidebarLink}>📋 신청서</Link>
           <Link href="/admin/form-settings" className={styles.sidebarLink}>📝 신청서설정</Link>
           <Link href="/admin/notices" className={styles.sidebarLink}>📢 공지사항</Link>
+          <Link href="/admin/resources" className={styles.sidebarLink}>📁 자료실</Link>
           <Link href="/admin/inquiries" className={`${styles.sidebarLink} ${styles.sidebarLinkActive}`}>💬 문의</Link>
           <Link href="/admin/site-settings" className={styles.sidebarLink}>⚙️ 사이트설정</Link>
         </nav>

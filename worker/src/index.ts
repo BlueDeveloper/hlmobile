@@ -1,4 +1,4 @@
-import { Env, createToken, json } from "./auth";
+import { Env, createToken, json, requireAuth } from "./auth";
 import { corsHeaders, handleOptions } from "./cors";
 import { handleCarriers } from "./carriers";
 import { handlePlans } from "./plans";
@@ -11,6 +11,7 @@ import { handleDashboard } from "./dashboard";
 import { handleFormVersions } from "./formVersions";
 import { handlePdfFill } from "./pdfFill";
 import { handleSettings } from "./settings";
+import { handleResources } from "./resources";
 
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
@@ -26,6 +27,8 @@ export default {
     try {
       if (path === "/api/auth/login" && request.method === "POST") {
         response = await handleLogin(request, env);
+      } else if (path === "/api/auth/change-password" && request.method === "POST") {
+        response = await handleChangePassword(request, env);
       } else if (path === "/api/upload") {
         response = await handleUpload(request, env);
       } else if (path.startsWith("/r2/")) {
@@ -46,6 +49,8 @@ export default {
         response = await handleNotices(request, env, path);
       } else if (path.startsWith("/api/applications")) {
         response = await handleApplications(request, env, path);
+      } else if (path.startsWith("/api/resources")) {
+        response = await handleResources(request, env, path);
       } else if (path === "/api/settings") {
         response = await handleSettings(request, env);
       } else if (path.startsWith("/api/inquiries")) {
@@ -75,9 +80,34 @@ async function handleLogin(request: Request, env: Env): Promise<Response> {
   } catch {
     return json({ ok: false, error: "잘못된 요청 형식입니다" }, 400);
   }
-  if (!body.password || body.password !== env.ADMIN_PASSWORD) {
+  if (!body.password) {
+    return json({ ok: false, error: "비밀번호를 입력해주세요" }, 400);
+  }
+  // D1에 저장된 비밀번호 우선, 없으면 환경변수 fallback
+  const row = await env.DB.prepare("SELECT value FROM site_settings WHERE key = 'admin_password'").first<{ value: string }>();
+  const correctPassword = row?.value || env.ADMIN_PASSWORD;
+  if (body.password !== correctPassword) {
     return json({ ok: false, error: "비밀번호가 올바르지 않습니다" }, 401);
   }
   const token = await createToken(env);
   return json({ ok: true, data: { token } });
+}
+
+async function handleChangePassword(request: Request, env: Env): Promise<Response> {
+  const authErr = await requireAuth(request, env);
+  if (authErr) return authErr;
+  const body = await request.json<{ currentPassword?: string; newPassword?: string }>();
+  if (!body.currentPassword || !body.newPassword) {
+    return json({ ok: false, error: "현재 비밀번호와 새 비밀번호를 입력해주세요" }, 400);
+  }
+  if (body.newPassword.length < 4) {
+    return json({ ok: false, error: "비밀번호는 4자 이상이어야 합니다" }, 400);
+  }
+  const row = await env.DB.prepare("SELECT value FROM site_settings WHERE key = 'admin_password'").first<{ value: string }>();
+  const correctPassword = row?.value || env.ADMIN_PASSWORD;
+  if (body.currentPassword !== correctPassword) {
+    return json({ ok: false, error: "현재 비밀번호가 올바르지 않습니다" }, 401);
+  }
+  await env.DB.prepare("INSERT OR REPLACE INTO site_settings (key, value, updated_at) VALUES ('admin_password', ?, datetime('now'))").bind(body.newPassword).run();
+  return json({ ok: true });
 }
