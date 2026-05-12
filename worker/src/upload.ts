@@ -11,16 +11,19 @@ export async function handleUpload(request: Request, env: Env): Promise<Response
   if (!file) return json({ ok: false, error: "파일이 없습니다" }, 400);
 
   const ext = file.name.split(".").pop()?.toLowerCase() || "png";
-  const allowed = ["png", "jpg", "jpeg", "gif", "webp", "svg", "pdf"];
-  if (!allowed.includes(ext)) return json({ ok: false, error: "지원하지 않는 파일 형식입니다" }, 400);
+  const allowedImages = ["png", "jpg", "jpeg", "gif", "webp", "svg"];
+  const allowedDocs = ["pdf", "xls", "xlsx", "doc", "docx", "hwp", "hwpx"];
+  const allowed = [...allowedImages, ...allowedDocs];
+  if (!allowed.includes(ext)) return json({ ok: false, error: "지원하지 않는 파일 형식입니다 (PDF, Excel, Word, HWP, 이미지 가능)" }, 400);
 
-  // 파일 크기 제한: PDF 20MB, 이미지 5MB
-  const maxSize = ext === "pdf" ? 20 * 1024 * 1024 : 5 * 1024 * 1024;
+  // 파일 크기 제한: 문서 20MB, 이미지 5MB
+  const isDoc = allowedDocs.includes(ext);
+  const maxSize = isDoc ? 20 * 1024 * 1024 : 5 * 1024 * 1024;
   if (file.size > maxSize) {
-    return json({ ok: false, error: ext === "pdf" ? "PDF 파일은 20MB 이하만 가능합니다" : "이미지 파일은 5MB 이하만 가능합니다" }, 400);
+    return json({ ok: false, error: isDoc ? "문서 파일은 20MB 이하만 가능합니다" : "이미지 파일은 5MB 이하만 가능합니다" }, 400);
   }
 
-  const folder = ext === "pdf" ? "forms" : "icons";
+  const folder = isDoc ? "forms" : "icons";
   const key = `${folder}/${Date.now()}-${Math.random().toString(36).slice(2, 8)}.${ext}`;
   await env.R2.put(key, file.stream(), {
     httpMetadata: { contentType: file.type },

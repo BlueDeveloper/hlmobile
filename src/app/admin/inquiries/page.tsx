@@ -33,7 +33,10 @@ export default function AdminInquiriesPage() {
   const handleReply = async () => {
     if (!modal) return;
     if (!reply.trim()) { toast("답변 내용을 입력해주세요.", "error"); return; }
-    await replyInquiry(modal.id, reply);
+    try {
+      await replyInquiry(modal.id, reply);
+      toast("답변이 저장되었습니다.", "success");
+    } catch { toast("답변 저장에 실패했습니다.", "error"); return; }
     setModal(null);
     load();
   };
@@ -41,8 +44,13 @@ export default function AdminInquiriesPage() {
   const handleBulkDelete = async () => {
     if (checkedIds.size === 0) { toast("삭제할 문의를 선택해주세요.", "error"); return; }
     if (!confirm(`${checkedIds.size}건의 문의를 삭제합니다.`)) return;
-    for (const id of checkedIds) { await deleteInquiry(id); }
+    setLoading(true);
+    let fail = 0;
+    for (const id of checkedIds) {
+      try { await deleteInquiry(id); } catch { fail++; }
+    }
     setCheckedIds(new Set());
+    if (fail > 0) toast(`${fail}건 삭제 실패`, "error");
     load();
   };
 

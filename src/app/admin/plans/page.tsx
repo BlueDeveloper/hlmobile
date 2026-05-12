@@ -35,6 +35,9 @@ function PlansContent() {
   const [extraForm, setExtraForm] = useState<Record<string, string>>({});
   const [fieldModal, setFieldModal] = useState(false);
   const [editingFields, setEditingFields] = useState<PlanField[]>([]);
+  const [bulkModal, setBulkModal] = useState(false);
+  const [bulkRows, setBulkRows] = useState<Array<{ name: string; monthly: number; base_fee: number; discount: number; type: string; voice: string; sms: string; data: string; qos: string }>>([]);
+  const [bulkImporting, setBulkImporting] = useState(false);
 
   // 선택된 통신사의 커스텀 요금제 필드
   const [customPlanFields, setCustomPlanFields] = useState<PlanField[]>([]);
@@ -113,7 +116,18 @@ function PlansContent() {
     if (!form.data.trim()) { toast("데이터를 입력해주세요.", "error"); return; }
 
     const hasExtra = Object.keys(extraForm).length > 0 && Object.values(extraForm).some(v => v.trim());
-    const payload = { ...form, extraFields: hasExtra ? extraForm : undefined };
+    const payload = {
+      name: form.name,
+      monthly: form.monthly,
+      baseFee: form.base_fee,
+      discount: form.discount,
+      voice: form.voice,
+      sms: form.sms,
+      data: form.data,
+      qos: form.qos,
+      sortOrder: form.sort_order,
+      extraFields: hasExtra ? extraForm : undefined,
+    };
 
     if (modal === "create") {
       const res = await createPlan({ carrierId: selectedCarrier, ...payload, type: form.type as "postpaid" | "prepaid" } as Parameters<typeof createPlan>[0]);
@@ -125,11 +139,94 @@ function PlansContent() {
     loadPlans();
   };
 
+  const parseCsv = (text: string) => {
+    const lines = text.trim().split(/\r?\n/);
+    if (lines.length < 2) return [];
+    const headers = lines[0].split(",").map(h => h.trim());
+    const headerMap: Record<string, string> = {
+      "요금제명": "name", "월납부금액": "monthly", "기본료": "base_fee",
+      "프로모션할인": "discount", "할인": "discount", "유형": "type",
+      "음성": "voice", "문자": "sms", "데이터": "data", "QOS": "qos", "qos": "qos",
+    };
+    return lines.slice(1).filter(l => l.trim()).map(line => {
+      const values = line.split(",").map(v => v.trim());
+      const row: { name: string; monthly: number; base_fee: number; discount: number; type: string; voice: string; sms: string; data: string; qos: string } =
+        { name: "", monthly: 0, base_fee: 0, discount: 0, type: "postpaid", voice: "", sms: "", data: "", qos: "-" };
+      headers.forEach((h, i) => {
+        const key = headerMap[h];
+        if (!key) return;
+        const val = (values[i] || "").replace(/[^0-9a-zA-Z가-힣.\-]/g, "");
+        if (key === "monthly" || key === "base_fee" || key === "discount") {
+          (row as Record<string, unknown>)[key] = Number(val) || 0;
+        } else if (key === "type") {
+          (row as Record<string, unknown>)[key] = val === "선불" ? "prepaid" : "postpaid";
+        } else {
+          (row as Record<string, unknown>)[key] = values[i]?.trim() || "";
+        }
+      });
+      if (!row.base_fee) row.base_fee = row.monthly;
+      return row;
+    });
+  };
+
+  const handleBulkFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+      const buffer = ev.target?.result as ArrayBuffer;
+      const utf8 = new TextDecoder("utf-8").decode(buffer);
+      const KOREAN_HEADERS = ["요금제명", "월납부금액", "기본료", "프로모션할인", "유형", "음성"];
+      const isValidUtf8 = KOREAN_HEADERS.some(h => utf8.includes(h));
+      let text = utf8;
+      if (!isValidUtf8) {
+        try { text = new TextDecoder("euc-kr").decode(buffer); } catch { text = utf8; }
+      }
+      const rows = parseCsv(text);
+      setBulkRows(rows);
+    };
+    reader.readAsArrayBuffer(file);
+  };
+
+  const handleBulkImport = async () => {
+    if (bulkRows.length === 0 || !selectedCarrier) return;
+    setBulkImporting(true);
+    let ok = 0; let fail = 0;
+    for (const row of bulkRows) {
+      if (!row.name) { fail++; continue; }
+      const res = await createPlan({
+        carrierId: selectedCarrier, name: row.name, monthly: row.monthly,
+        baseFee: row.base_fee, discount: row.discount, type: row.type as "postpaid" | "prepaid",
+        voice: row.voice, sms: row.sms, data: row.data, qos: row.qos,
+        sortOrder: plans.length + ok + 1,
+      } as Parameters<typeof createPlan>[0]);
+      res.ok ? ok++ : fail++;
+    }
+    setBulkImporting(false);
+    setBulkModal(false);
+    setBulkRows([]);
+    toast(`${ok}건 추가 완료${fail > 0 ? ` (${fail}건 실패)` : ""}`, ok > 0 ? "success" : "error");
+    loadPlans();
+  };
+
+  const downloadCsvTemplate = () => {
+    const header = "요금제명,월납부금액,기본료,프로모션할인,유형,음성,문자,데이터,QOS";
+    const example = "5G다이렉트59,55000,55000,16500,후불,무제한,무제한,110GB,최대 1Gbps";
+    const blob = new Blob([`${header}\n${example}`], { type: "text/csv;charset=utf-8;" });
+    const a = document.createElement("a"); a.href = URL.createObjectURL(blob);
+    a.download = "요금제_일괄추가_양식.csv"; a.click();
+  };
+
   const handleBulkDelete = async () => {
     if (checkedIds.size === 0) { toast("삭제할 요금제를 선택해주세요.", "error"); return; }
     if (!confirm(`${checkedIds.size}건의 요금제를 삭제합니다.`)) return;
-    for (const id of checkedIds) { await deletePlan(id); }
+    setLoading(true);
+    let fail = 0;
+    for (const id of checkedIds) {
+      try { await deletePlan(id); } catch { fail++; }
+    }
     setCheckedIds(new Set());
+    if (fail > 0) toast(`${fail}건 삭제 실패`, "error");
     loadPlans();
   };
 
@@ -205,6 +302,7 @@ function PlansContent() {
           <h1 className={styles.pageTitle}>요금제 관리</h1>
           <div style={{ display: "flex", gap: 8 }}>
             {selectedCarrier && <button onClick={openFieldModal} style={{ padding: "8px 16px", background: "#F0FDF4", color: "#059669", borderRadius: 10, fontSize: 13, fontWeight: 700, cursor: "pointer", border: "1px solid #BBF7D0" }}>항목 관리</button>}
+            <button onClick={() => { setBulkRows([]); setBulkModal(true); }} style={{ padding: "8px 16px", background: "#FEF3C7", color: "#92400E", borderRadius: 10, fontSize: 13, fontWeight: 700, cursor: "pointer", border: "1px solid #FDE68A" }}>일괄 추가</button>
             <button className={styles.addBtn} onClick={openCreate}>+ 추가</button>
           </div>
         </div>
@@ -439,6 +537,68 @@ function PlansContent() {
               <div className={styles.modalActions}>
                 <button className={styles.cancelBtn} onClick={() => setFieldModal(false)}>취소</button>
                 <button className={styles.saveBtn} onClick={handleSaveFields}>저장</button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* 일괄 추가 모달 */}
+        {bulkModal && (
+          <div className={styles.overlay} onClick={() => setBulkModal(false)}>
+            <div className={styles.modal} onClick={e => e.stopPropagation()} style={{ maxWidth: 800 }}>
+              <div className={styles.modalHeader}>
+                <h2 className={styles.modalTitle}>요금제 일괄 추가 (CSV)</h2>
+                <button className={styles.modalClose} onClick={() => setBulkModal(false)}>✕</button>
+              </div>
+
+              <div style={{ display: "flex", gap: 10, alignItems: "center", marginBottom: 16 }}>
+                <label style={{ padding: "10px 18px", background: "var(--brand)", color: "white", borderRadius: 10, fontSize: 13, fontWeight: 700, cursor: "pointer", whiteSpace: "nowrap" }}>
+                  CSV 파일 선택
+                  <input type="file" accept=".csv,text/csv" style={{ display: "none" }} onChange={handleBulkFileChange} />
+                </label>
+                <button onClick={downloadCsvTemplate} style={{ padding: "10px 14px", background: "#F1F5F9", color: "var(--text-2)", borderRadius: 10, fontSize: 13, fontWeight: 600, cursor: "pointer", border: "1px solid #E8ECF1" }}>
+                  양식 다운로드
+                </button>
+                <span style={{ fontSize: 12, color: "var(--text-3)" }}>열 순서: 요금제명, 월납부금액, 기본료, 프로모션할인, 유형(후불/선불), 음성, 문자, 데이터, QOS</span>
+              </div>
+
+              {bulkRows.length > 0 && (
+                <>
+                  <div style={{ fontSize: 13, fontWeight: 700, color: "#059669", marginBottom: 8 }}>{bulkRows.length}건 미리보기</div>
+                  <div style={{ overflowX: "auto", marginBottom: 16, border: "1px solid #E8ECF1", borderRadius: 10 }}>
+                    <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+                      <thead>
+                        <tr style={{ background: "#F8FAFC" }}>
+                          {["요금제명","월납부금액","기본료","할인","유형","음성","문자","데이터","QOS"].map(h => (
+                            <th key={h} style={{ padding: "8px 10px", textAlign: "left", fontWeight: 700, color: "var(--text-2)", borderBottom: "1px solid #E8ECF1", whiteSpace: "nowrap" }}>{h}</th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {bulkRows.map((r, i) => (
+                          <tr key={i} style={{ borderBottom: "1px solid #F1F5F9" }}>
+                            <td style={{ padding: "7px 10px", fontWeight: 600 }}>{r.name || <span style={{ color: "#DC2626" }}>비어있음</span>}</td>
+                            <td style={{ padding: "7px 10px" }}>{r.monthly.toLocaleString()}</td>
+                            <td style={{ padding: "7px 10px" }}>{r.base_fee.toLocaleString()}</td>
+                            <td style={{ padding: "7px 10px", color: "var(--danger)" }}>{r.discount.toLocaleString()}</td>
+                            <td style={{ padding: "7px 10px" }}>{r.type === "postpaid" ? "후불" : "선불"}</td>
+                            <td style={{ padding: "7px 10px" }}>{r.voice}</td>
+                            <td style={{ padding: "7px 10px" }}>{r.sms}</td>
+                            <td style={{ padding: "7px 10px" }}>{r.data}</td>
+                            <td style={{ padding: "7px 10px" }}>{r.qos}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </>
+              )}
+
+              <div className={styles.modalActions}>
+                <button className={styles.cancelBtn} onClick={() => setBulkModal(false)}>취소</button>
+                <button className={styles.saveBtn} onClick={handleBulkImport} disabled={bulkRows.length === 0 || bulkImporting}>
+                  {bulkImporting ? "추가 중..." : `${bulkRows.length}건 추가`}
+                </button>
               </div>
             </div>
           </div>

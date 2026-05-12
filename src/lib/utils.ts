@@ -37,5 +37,7 @@ export function isValidBirth(birth: string): boolean {
   if (y < 1900 || y > new Date().getFullYear()) return false;
   if (m < 1 || m > 12) return false;
   if (d < 1 || d > 31) return false;
-  return true;
+  // 월별 실제 일수 검증 (예: 2월 29~31일, 4월 31일 등)
+  const date = new Date(y, m - 1, d);
+  return date.getFullYear() === y && date.getMonth() === m - 1 && date.getDate() === d;
 }

@@ -202,7 +202,7 @@ export default function CarriersPage() {
                               {mvno.payment_type === "postpaid" ? "후불" : mvno.payment_type === "prepaid" ? "선불" : "후불+선불"}
                             </span>
                           </td>
-                          <td onClick={e => { e.stopPropagation(); updateCarrier(mvno.id, { is_active: mvno.is_active ? 0 : 1 } as unknown as Partial<Carrier>).then(() => load()); }}>
+                          <td onClick={e => { e.stopPropagation(); updateCarrier(mvno.id, { is_active: mvno.is_active ? 0 : 1 } as unknown as Partial<Carrier>).then(() => { toast(mvno.is_active ? "비활성화 완료" : "활성화 완료", "success"); load(); }).catch(() => toast("변경 실패", "error")); }}>
                             <span style={{ cursor: "pointer", fontSize: 18 }}>{mvno.is_active ? "✅" : "❌"}</span>
                           </td>
                         </tr>
@@ -229,7 +229,7 @@ export default function CarriersPage() {
                     <div className={styles.cardBody}>
                       <div className={styles.cardField}><span className={styles.cardFieldLabel}>ID</span><span className={styles.cardFieldValue}>{mvno.id}</span></div>
                       <div className={styles.cardField}><span className={styles.cardFieldLabel}>설명</span><span className={styles.cardFieldValue}>{mvno.description}</span></div>
-                      <div className={styles.cardField}><span className={styles.cardFieldLabel}>상태</span><span className={styles.cardFieldValue} onClick={e => { e.stopPropagation(); updateCarrier(mvno.id, { is_active: mvno.is_active ? 0 : 1 } as unknown as Partial<Carrier>).then(() => load()); }} style={{ cursor: "pointer" }}>{mvno.is_active ? "✅ 사용" : "❌ 비사용"}</span></div>
+                      <div className={styles.cardField}><span className={styles.cardFieldLabel}>상태</span><span className={styles.cardFieldValue} onClick={e => { e.stopPropagation(); updateCarrier(mvno.id, { is_active: mvno.is_active ? 0 : 1 } as unknown as Partial<Carrier>).then(() => { toast(mvno.is_active ? "비활성화 완료" : "활성화 완료", "success"); load(); }).catch(() => toast("변경 실패", "error")); }} style={{ cursor: "pointer" }}>{mvno.is_active ? "✅ 사용" : "❌ 비사용"}</span></div>
                     </div>
                   </div>
                 ))}
