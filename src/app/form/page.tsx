@@ -7,47 +7,22 @@ import Header from "@/components/Header";
 import { useToast } from "@/components/Toast";
 import { fetchCarrierTree, fetchPlans, createApplication } from "@/lib/api";
 import { formatPhone, formatBirth, isValidBirth, formatPrice, parseJsonSafe } from "@/lib/utils";
-import { fillAndOpenPdf } from "@/lib/pdfClient";
+import { fillAndOpenPdf, type PdfProgressStep } from "@/lib/pdfClient";
+import PdfProgressModal from "@/components/PdfProgressModal";
 import type { Carrier, Plan, FormFieldConfig } from "@/types";
 import styles from "./page.module.css";
 
 const TOTAL_STEPS = 5; // 대분류 → 알뜰폰 → 요금제 → 정보 → 확인
 
-// 필드 key별 테스트 기본값
-const DEFAULT_VALUES: Record<string, string> = {
-  usimSerial: "8982001234567890",
-  customerType: "개인",
-  subscriberName: "홍길동",
-  contactNumber: "010-1234-5678",
-  birthDate: "1990-01-15",
-  idNumber: "900115-1234567",
-  nationality: "대한민국",
-  address: "(06236) 서울특별시 강남구 테헤란로 123",
-  addressDetail: "456호",
-  activationType: "번호이동",
-  desiredNumber: "010-9876-5432",
-  storeName: "HL모바일 강남점",
-};
-
 function buildDefaultData(fields: FormFieldConfig[]): Record<string, string> {
   const data: Record<string, string> = {};
   for (const f of fields) {
-    if (DEFAULT_VALUES[f.key]) {
-      data[f.key] = DEFAULT_VALUES[f.key];
-    } else if (f.type === "select" && f.options?.length) {
+    if (f.type === "select" && f.options?.length) {
       data[f.key] = f.options[0];
-    } else if (f.type === "phone") {
-      data[f.key] = "010-0000-0000";
-    } else if (f.type === "date") {
-      data[f.key] = "2000-01-01";
-    } else if (f.type === "address") {
-      data[f.key] = "(00000) 서울특별시 강남구";
     } else if (f.type === "composite" && f.subFields) {
-      for (const sub of f.subFields) { data[sub.key] = sub.label; }
-    } else if (f.type === "text") {
-      data[f.key] = f.label;
+      for (const sub of f.subFields) { data[sub.key] = ""; }
     } else {
-      data[f.key] = f.label || "";
+      data[f.key] = "";
     }
   }
   return data;
@@ -93,6 +68,7 @@ function FormContent() {
   const [formFields, setFormFields] = useState<FormFieldConfig[]>([]);
 
   const [submitted, setSubmitted] = useState(false);
+  const [pdfProgress, setPdfProgress] = useState<{ step: PdfProgressStep; percent: number } | null>(null);
 
   // 트리 로드
   useEffect(() => {
@@ -131,6 +107,7 @@ function FormContent() {
   }, []);
 
   useEffect(() => {
+    setSelectedPlan(null); // 통신사 변경 시 이전 요금제 선택 초기화
     if (selectedCarrier) loadPlans(selectedCarrier);
     // form_config에서 전체 필드 로드
     const mvno = tree.flatMap(m => m.children || []).find(c => c.id === selectedCarrier);
@@ -174,7 +151,7 @@ function FormContent() {
     switch (step) {
       case 1: return selectedMno !== "";
       case 2: return selectedCarrier !== "";
-      case 3: return selectedPlan !== null;
+      case 3: return selectedPlan !== null && !plansLoading;
       case 4: return formFields.filter(f => f.required && (!f.showWhen || (formData[f.showWhen.field] || "") === f.showWhen.value)).every(f => (formData[f.key] || "").trim() !== "");
       case 5: return true;
       default: return false;
@@ -260,7 +237,7 @@ function FormContent() {
                         : `${API}${mvnoData.form_template}`;
                       try {
                         const excludedPages = parseJsonSafe<number[]>(mvnoData?.excluded_pages, []);
-                        toast("PDF 생성 중...", "info");
+                        setPdfProgress({ step: "preparing", percent: 0 });
                         // 사용자 항목 (form_config 기반) + 합성 필드 처리
                         const userValues: Record<string, string> = { ...formData };
                         // 주소+상세주소 합성
@@ -285,11 +262,16 @@ function FormContent() {
                           carrierName: carrierName,
                           // 커스텀 요금제 필드
                           ...(selectedPlan?.extra_fields ? (() => { try { return JSON.parse(selectedPlan.extra_fields!) as Record<string, string>; } catch { return {}; } })() : {}),
-                        }, { excludedPages });
+                        }, {
+                          excludedPages,
+                          onProgress: (step, percent) => setPdfProgress({ step, percent }),
+                        });
                         toast("PDF가 새 탭에서 열렸습니다.", "success");
                       } catch {
                         toast("PDF 생성 실패. 기본 인쇄로 전환합니다.", "error");
                         window.print();
+                      } finally {
+                        setPdfProgress(null);
                       }
                     } else {
                       window.print();
@@ -301,6 +283,7 @@ function FormContent() {
 
           </div>
         </div>
+        {pdfProgress && <PdfProgressModal step={pdfProgress.step} percent={pdfProgress.percent} />}
       </>
     );
   }

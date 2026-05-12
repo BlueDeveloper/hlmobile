@@ -19,8 +19,17 @@ interface FieldPosition {
   checkValue?: string;
 }
 
+export type PdfProgressStep =
+  | "preparing"
+  | "downloading-pdf"
+  | "downloading-font"
+  | "rendering"
+  | "saving"
+  | "done";
+
 interface FillOptions {
   excludedPages?: number[];
+  onProgress?: (step: PdfProgressStep, percent: number) => void;
 }
 
 const PLAN_FIELD_MAP: Record<string, string> = {
@@ -89,24 +98,31 @@ export async function fillPdfClient(
   options?: FillOptions
 ): Promise<Blob> {
   const excludedPages = options?.excludedPages || [];
+  const onProgress = options?.onProgress;
+
+  onProgress?.("preparing", 5);
 
   // 누락된 요금제 필드 보충
   const enrichedValues = await enrichPlanValues(values, positions, templateUrl);
 
-  // 1. 원본 PDF 가져오기
-  const pdfRes = await fetch(templateUrl);
-  if (!pdfRes.ok) throw new Error("PDF 파일을 가져올 수 없습니다");
-  const pdfBytes = await pdfRes.arrayBuffer();
+  // 1. 원본 PDF 가져오기 (스트림으로 진행률 측정)
+  onProgress?.("downloading-pdf", 10);
+  const pdfBytes = await fetchWithProgress(templateUrl, (loaded, total) => {
+    const pct = total > 0 ? 10 + Math.floor((loaded / total) * 30) : 10;
+    onProgress?.("downloading-pdf", pct);
+  });
 
   // 2. 한글 폰트 로드 (캐시 사용)
   if (!cachedFontBytes) {
-    const fontRes = await fetch(NOTO_SANS_KR_URL);
-    if (fontRes.ok) {
-      cachedFontBytes = await fontRes.arrayBuffer();
-    }
+    onProgress?.("downloading-font", 40);
+    cachedFontBytes = await fetchWithProgress(NOTO_SANS_KR_URL, (loaded, total) => {
+      const pct = total > 0 ? 40 + Math.floor((loaded / total) * 30) : 40;
+      onProgress?.("downloading-font", pct);
+    });
   }
 
   // 3. PDF 복사 + 텍스트 오버레이
+  onProgress?.("rendering", 70);
   const srcDoc = await PDFDocument.load(pdfBytes, {
     ignoreEncryption: true,
     updateMetadata: false,
@@ -183,8 +199,35 @@ export async function fillPdfClient(
     }
   }
 
+  onProgress?.("saving", 95);
   const filledBytes = await pdfDoc.save();
+  onProgress?.("done", 100);
   return new Blob([new Uint8Array(filledBytes)], { type: "application/pdf" });
+}
+
+async function fetchWithProgress(
+  url: string,
+  onChunk: (loaded: number, total: number) => void
+): Promise<ArrayBuffer> {
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`다운로드 실패: ${url}`);
+  const total = Number(res.headers.get("content-length") || 0);
+  if (!res.body || total === 0) return res.arrayBuffer();
+
+  const reader = res.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let loaded = 0;
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    chunks.push(value);
+    loaded += value.length;
+    onChunk(loaded, total);
+  }
+  const merged = new Uint8Array(loaded);
+  let offset = 0;
+  for (const c of chunks) { merged.set(c, offset); offset += c.length; }
+  return merged.buffer;
 }
 
 export async function fillAndOpenPdf(
@@ -197,4 +240,15 @@ export async function fillAndOpenPdf(
   const url = URL.createObjectURL(blob);
   window.open(url, "_blank");
   setTimeout(() => URL.revokeObjectURL(url), 60000);
+}
+
+export function progressLabel(step: PdfProgressStep): string {
+  switch (step) {
+    case "preparing": return "준비 중...";
+    case "downloading-pdf": return "신청서 양식을 다운로드 중...";
+    case "downloading-font": return "한글 폰트를 다운로드 중...";
+    case "rendering": return "신청서를 만드는 중...";
+    case "saving": return "PDF 파일을 저장하는 중...";
+    case "done": return "완료!";
+  }
 }

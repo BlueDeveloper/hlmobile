@@ -4,8 +4,9 @@ import { useState, useEffect, useCallback } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { fetchApplications, deleteApplication, fetchCarrierTree } from "@/lib/api";
-import { fillAndOpenPdf } from "@/lib/pdfClient";
+import { fillAndOpenPdf, type PdfProgressStep } from "@/lib/pdfClient";
 import { useToast } from "@/components/Toast";
+import PdfProgressModal from "@/components/PdfProgressModal";
 import { formatPrice, parseJsonSafe } from "@/lib/utils";
 import type { Application, Carrier } from "@/types";
 import styles from "../page.module.css";
@@ -17,6 +18,7 @@ export default function AdminApplicationsPage() {
   const [checkedIds, setCheckedIds] = useState<Set<number>>(new Set());
   const [detail, setDetail] = useState<Application | null>(null);
   const [printing, setPrinting] = useState(false);
+  const [pdfProgress, setPdfProgress] = useState<{ step: PdfProgressStep; percent: number } | null>(null);
   const [tree, setTree] = useState<Carrier[]>([]);
   const router = useRouter();
 
@@ -37,8 +39,13 @@ export default function AdminApplicationsPage() {
   const handleBulkDelete = async () => {
     if (checkedIds.size === 0) { toast("삭제할 신청서를 선택해주세요.", "error"); return; }
     if (!confirm(`${checkedIds.size}건의 신청서를 삭제합니다.`)) return;
-    for (const id of checkedIds) { await deleteApplication(id); }
+    setLoading(true);
+    let fail = 0;
+    for (const id of checkedIds) {
+      try { await deleteApplication(id); } catch { fail++; }
+    }
     setCheckedIds(new Set());
+    if (fail > 0) toast(`${fail}건 삭제 실패`, "error");
     load();
   };
 
@@ -47,8 +54,7 @@ export default function AdminApplicationsPage() {
   const handleLogout = () => { sessionStorage.removeItem("admin_token"); router.push("/admin"); };
 
   const handlePrint = async (app: Application) => {
-    const freshTree = await fetchCarrierTree(false, true);
-    const allMvnos = freshTree.flatMap((m: Carrier) => m.children || []);
+    const allMvnos = tree.flatMap((m: Carrier) => m.children || []);
     const mvno = allMvnos.find((c: Carrier) => c.id === app.carrier_id);
     if (!mvno?.form_template?.endsWith(".pdf")) {
       toast("해당 통신사에 PDF 양식이 없습니다.", "error");
@@ -64,6 +70,7 @@ export default function AdminApplicationsPage() {
     const extraData: Record<string, string> = app.extra_data ? (() => { try { return JSON.parse(app.extra_data); } catch { return {}; } })() : {};
 
     setPrinting(true);
+    setPdfProgress({ step: "preparing", percent: 0 });
     try {
       await fillAndOpenPdf(templateUrl, positions, {
         subscriberName: app.subscriber_name,
@@ -84,12 +91,16 @@ export default function AdminApplicationsPage() {
         carrierName: app.carrier_name,
         // 커스텀 사용자 필드
         ...extraData,
-      }, { excludedPages });
+      }, {
+        excludedPages,
+        onProgress: (step, percent) => setPdfProgress({ step, percent }),
+      });
       toast("PDF가 새 탭에서 열렸습니다.", "success");
     } catch {
       toast("PDF 생성 실패", "error");
     } finally {
       setPrinting(false);
+      setPdfProgress(null);
     }
   };
 
@@ -254,6 +265,7 @@ export default function AdminApplicationsPage() {
           </div>
         )}
       </main>
+      {pdfProgress && <PdfProgressModal step={pdfProgress.step} percent={pdfProgress.percent} />}
     </div>
   );
 }
